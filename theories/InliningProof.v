@@ -27,7 +27,7 @@ Let call_args := match nth_error (fn_code caller) (cs_pc cs) with
                  | Some (Icall _ args _ _) => args
                  | _ => []
                  end.
-                                  
+
 Let node_offset := length (fn_code caller) +
                    length (bind_params call_args (fn_params callee)
                              reg_offset (length (fn_code caller))).
@@ -99,16 +99,80 @@ Inductive match_states : state -> state -> Prop :=
                    (Returnstate s_tgt v)
 .
 
-(* The main (forward) simulation theorem:
-   If source steps and states match, then target steps (possibly multiple)
-   and the resulting states match. *)
-Theorem step_simulation :
-  forall s1 s1' s2,
-    match_states s1 s2 ->
-    step p s1 s1' ->
-    exists s2', (step p' s2 s2' \/ clos_refl_trans_1n _ (step p') s2 s2') /\
-                match_states s1' s2'.
+Ltac inv H := inversion H; subst; clear H.
+
+Inductive plus (step : state -> state -> Prop) : state -> state -> Prop :=
+   | plus_one : forall s1 s2,
+      step s1 s2 -> plus step s1 s2
+   | plus_step : forall s1 s2 s3,
+      step s1 s2 -> plus step s2 s3 -> plus
+   step s1 s3.
+
+(* Functions not at cs_caller are identical in p and p' *)
+Lemma other_func_preserved : forall i f,
+  i <> cs_caller cs ->
+  nth_error p i = Some f ->
+  nth_error p' i = Some f.
 Proof.
+Admitted.
+
+(* Instructions in the caller at PCs other than cs_pc are preserved *)
+Lemma other_pc_preserved : forall pc i,
+  pc <> cs_pc cs ->
+  nth_error (fn_code caller) pc = Some i ->
+  exists caller', nth_error p' (cs_caller cs) = Some caller' /\
+  nth_error (fn_code caller') pc = Some i.
+Proof.
+Admitted.
+
+(* The inlined program preserves function lookup for non-inlined calls *)
+Lemma find_func_preserved : forall target fd,
+  nth_error p target = Some fd ->
+  nth_error p' target = Some fd \/
+  (target = cs_caller cs /\ exists fd', nth_error p' target = Some fd').
+Proof.
+Admitted.
+
+(* The main (forward) simulation theorem: If source steps and states match,
+   then target steps (possibly multiple) and the resulting states match. *)
+Theorem step_simulation:
+   forall s1 s1' s2,
+   match_states s1 s2 ->
+   step p s1 s1' ->
+   exists s2', plus (step p') s2 s2' /\ match_states s1' s2'.
+Proof.
+  (* dispatch the easy cases - normal state + one step *)
+  intros s1 s1' s2 Hmatch Hstep.
+  inv Hmatch; inv Hstep; try (eexists; split;
+    [ apply plus_one; econstructor; eauto
+    | econstructor; eauto ]; fail).
+
+  - (* exec_Icall at normal : may be the inlined site *)
+    admit.
+
+  - (* exec_Iret at normal *)
+    admit.
+
+  - (* exec_return at match_returnstate *)
+    admit.
+
+  - (* exec_Inop inside inlined body *)
+    admit.
+
+  - (* exec_Iop inside inlined body *)
+    admit.
+
+  - (* exec_Icond_true inside inlined body *)
+    admit.
+
+  - (* exec_Icond_false inside inlined body *)
+    admit.
+
+  - (* exec_Icall inside inlined body : impossible, callee is leaf *)
+    admit.
+
+  - (* exec_Iret inside inlined body : return from inlined callee *)
+    admit.
 Admitted.
 
 End INLINING_PROOF.
