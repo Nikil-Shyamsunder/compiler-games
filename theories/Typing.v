@@ -1,0 +1,1 @@
+(* Maybe one day... prove that well-typed programs dont get stuck. *)
