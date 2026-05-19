@@ -1,5 +1,6 @@
 From VerifPerf Require Import Syntax Semantics Inlining.
-From Stdlib Require Import List Nat Bool Relations.
+From Stdlib Require Import List Nat Bool Relations Arith.
+From Stdlib Require Import PeanoNat.
 Import ListNotations.
 
 Section INLINING_PROOF.
@@ -56,13 +57,13 @@ Inductive match_stacks : list stackframe -> list stackframe -> Prop :=
       while target is still in the caller executing the spliced-in code *)
 Inductive match_states : state -> state -> Prop :=
   (* Both executing the same function at the same pc *)
-  | match_normal : forall s_src s_tgt f pc rs_src rs_tgt,
+  | match_normal : forall s_src s_tgt fi f_src f_tgt pc rs_src rs_tgt,
       match_stacks s_src s_tgt ->
-      (* TODO: we could make this stronger since there is no inlining and 
-      just have register state equality? *)
       regs_agree rs_src rs_tgt ->
-      match_states (State s_src f pc rs_src)
-                   (State s_tgt f pc rs_tgt)
+      nth_error p fi = Some f_src ->
+      nth_error p' fi = Some f_tgt ->
+      match_states (State s_src f_src pc rs_src)
+                   (State s_tgt f_tgt pc rs_tgt)
 
   (* Source is inside the callee (has pushed a stack frame),
      target is executing the inlined body within the caller *)
@@ -133,6 +134,16 @@ Lemma find_func_preserved : forall target fd,
 Proof.
 Admitted.
 
+(* Code at a pc is preserved if it's not the inlined site in the caller *)
+Lemma code_at_pc_preserved : forall fi f_src f_tgt pc instr,
+  nth_error p fi = Some f_src ->
+  nth_error p' fi = Some f_tgt ->
+  (fi <> cs_caller cs \/ pc <> cs_pc cs) ->
+  nth_error (fn_code f_src) pc = Some instr ->
+  nth_error (fn_code f_tgt) pc = Some instr.
+Proof.
+Admitted.
+
 (* The main (forward) simulation theorem: If source steps and states match,
    then target steps (possibly multiple) and the resulting states match. *)
 Theorem step_simulation:
@@ -147,8 +158,12 @@ Proof.
     [ apply plus_one; econstructor; eauto
     | econstructor; eauto ]; fail).
 
-  - (* exec_Icall at normal : may be the inlined site *)
-    admit.
+  - (* exec_Icall at normal : case split on whether this is the inlined site *)
+    destruct (Nat.eq_dec pc (cs_pc cs)) as [Hinl | Hnotinl].
+    + (* This IS the inlined call site *)
+      admit.
+    + (* This is a different call site -- target takes the same Icall step *)
+      admit.
 
   - (* exec_Iret at normal *)
     admit.
@@ -169,7 +184,7 @@ Proof.
     admit.
 
   - (* exec_Icall inside inlined body : impossible, callee is leaf *)
-    admit.
+    exfalso. admit.
 
   - (* exec_Iret inside inlined body : return from inlined callee *)
     admit.
