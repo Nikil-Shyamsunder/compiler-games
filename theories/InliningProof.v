@@ -159,20 +159,29 @@ Lemma other_pc_preserved : forall pc i,
   exists caller', nth_error p' (cs_caller cs) = Some caller' /\
   nth_error (fn_code caller') pc = Some i.
 Proof.
-  (* TODO: can some duplicate code be replaced by caller_in_p' ? *)
-  unpack_inline. rewrite Hp'.
-  exists caller_f'.
-  replace (caller_f' :: skipn (cs_caller cs + 1) p)
-      with ([caller_f'] ++ skipn (cs_caller cs + 1) p) by reflexivity.
-  split.
-  - apply nth_error_replace_same. apply nth_error_Some. congruence.
-
-  (* the target fn at `pc` is same as source fn at `pc`, `pc <> cs`.
-     Proof sketch: unfold inline_in_func to get fn_code caller_f',
-     then use nth_error_app1 (pc < length patched_caller)
-     and nth_error_replace_other (pc <> cs_pc cs). *)
-  - admit.
-Admitted.
+  intros pc i Hpc Hi. unpack_inline.
+  unfold inline_in_func in Hinl_func.
+  change (fn_code caller) with (fn_code caller_f) in Hi.
+  destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [[]|] eqn:Hcall;
+    try discriminate.
+  injection Hinl_func as Hcf'.
+  assert (Hpc_bound : pc < length (fn_code caller_f))
+    by (apply nth_error_Some; congruence).
+  assert (Hcs_bound : cs_pc cs < length (fn_code caller_f))
+    by (apply nth_error_Some; congruence).
+  rewrite Hp'.
+  eexists. split.
+  - change (?x :: ?rest) with ([x] ++ rest).
+    apply nth_error_replace_same. apply nth_error_Some. congruence.
+  - rewrite <- Hcf'. simpl. unfold inline_call_site.
+    rewrite nth_error_app1.
+    + rewrite nth_error_replace_other; auto.
+    + assert (length (firstn (cs_pc cs) (fn_code caller_f) ++
+              [Inop (length (fn_code caller_f))] ++
+              skipn (cs_pc cs + 1) (fn_code caller_f)) = length (fn_code caller_f)).
+      { rewrite !length_app, length_firstn, length_skipn. simpl. lia. }
+      lia.
+Qed.
 
 (* The inlined program preserves function lookup for non-inlined calls *)
 Lemma find_func_preserved : forall target fd,
@@ -194,7 +203,21 @@ Lemma code_at_pc_preserved : forall fi f_src f_tgt pc instr,
   nth_error (fn_code f_src) pc = Some instr ->
   nth_error (fn_code f_tgt) pc = Some instr.
 Proof.
-Admitted.
+  intros fi f_src f_tgt pc instr Hsrc Htgt Hdisj Hcode.
+  destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq | Hneq].
+  - (* fi = cs_caller cs: must have pc <> cs_pc cs *)
+    assert (Hpc : pc <> cs_pc cs) by (destruct Hdisj; congruence).
+    subst fi.
+    destruct (other_pc_preserved pc instr Hpc) as [c' [Hc' Hinstr]].
+    + unfold caller. rewrite Hsrc. exact Hcode.
+    + congruence.
+  - (* fi <> cs_caller cs: whole function unchanged *)
+    replace f_tgt with f_src by
+      (assert (nth_error p' fi = Some f_src) by
+        (apply other_func_preserved; auto; apply nth_error_Some; congruence);
+       congruence).
+    exact Hcode.
+Qed.
 
 (* The main (forward) simulation theorem: If source steps and states match,
    then target steps (possibly multiple) and the resulting states match. *)
