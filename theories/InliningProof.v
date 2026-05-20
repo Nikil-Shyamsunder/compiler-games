@@ -43,9 +43,14 @@ Inductive match_stacks : list stackframe -> list stackframe -> Prop :=
                    (Stackframe dst f pc rs_tgt :: s_tgt).
 
 Inductive match_states : state -> state -> Prop :=
+  (* TODO: potentially needs strengthening?
+  for fi <> cs_caller cs, rs_src = rs_tgt strictly
+  for fi = cs_caller cs, regs_agree rs_src rs_tgt 
+  *)
   | match_normal : forall s_src s_tgt fi f_src f_tgt pc rs_src rs_tgt,
       match_stacks s_src s_tgt ->
-      regs_agree rs_src rs_tgt ->
+      (fi <> cs_caller cs -> rs_src = rs_tgt) ->
+      (fi = cs_caller cs -> regs_agree rs_src rs_tgt) ->
       nth_error p fi = Some f_src ->
       nth_error p' fi = Some f_tgt ->
       match_states (State s_src f_src pc rs_src)
