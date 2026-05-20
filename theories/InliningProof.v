@@ -8,7 +8,7 @@ Section INLINING_PROOF.
 Variable p : program.
 Variable cs : callsite.
 Variable p' : program.
-Variable Hinline : inline p cs = Some p'.
+Hypothesis Hinline : inline p cs = Some p'.
 
 (* The callee function that was inlined *)
 Let callee := match nth_error p (cs_target cs) with
@@ -60,10 +60,14 @@ Inductive match_states : state -> state -> Prop :=
   | match_normal : forall s_src s_tgt fi f_src f_tgt pc rs_src rs_tgt,
       match_stacks s_src s_tgt ->
       regs_agree rs_src rs_tgt ->
+      
+      (* funcs may be different (due to inlining of a callsite),
+        but the indices are equal *)
       nth_error p fi = Some f_src ->
       nth_error p' fi = Some f_tgt ->
-      match_states (State s_src f_src pc rs_src)
-                   (State s_tgt f_tgt pc rs_tgt)
+
+      match_states (State s_src f_src (* same pc *) pc rs_src)
+                   (State s_tgt f_tgt (* same pc *) pc rs_tgt)
 
   (* Source is inside the callee (has pushed a stack frame),
      target is executing the inlined body within the caller *)
@@ -109,13 +113,25 @@ Inductive plus (step : state -> state -> Prop) : state -> state -> Prop :=
       step s1 s2 -> plus step s2 s3 -> plus
    step s1 s3.
 
+
 (* Functions not at cs_caller are identical in p and p' *)
 Lemma other_func_preserved : forall i f,
   i <> cs_caller cs ->
+  i < length p ->
   nth_error p i = Some f ->
   nth_error p' i = Some f.
 Proof.
-Admitted.
+  intros i f hNotCS hLen hf.
+  unfold inline in Hinline.
+  destruct (nth_error p (cs_target cs)) eqn:Htarget; [|discriminate].
+  destruct (isLeafb f0) eqn:Hleaf; [| discriminate].
+  destruct (nth_error p (cs_caller cs)) eqn:Hcaller; [|discriminate].
+  destruct (inline_in_func f1 f0 (cs_pc cs)) eqn:Hinl; [|discriminate].
+  inversion Hinline.
+  (* Inversion is oversimplifying? so we do this annoying replace thing *)
+  replace (f2 :: skipn (cs_caller cs + 1) p) with ([f2] ++ skipn (cs_caller cs + 1) p) by reflexivity.
+  rewrite nth_error_replace_other; assumption.
+Qed.
 
 (* Instructions in the caller at PCs other than cs_pc are preserved *)
 Lemma other_pc_preserved : forall pc i,
