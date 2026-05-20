@@ -1,5 +1,5 @@
 From VerifPerf Require Import Syntax.
-From Stdlib Require Import List Nat Bool.
+From Stdlib Require Import List Nat Bool Lia.
 Import ListNotations.
 
 (* Maximum register used in an instruction *)
@@ -119,3 +119,33 @@ Definition inline (p : program) (cs : callsite) : option program :=
         end
       else None
   end.
+
+ 
+(* replacing `list[n]` does not change `nth_error l i` if `i <> n` *)
+Lemma nth_error_replace_other : forall (A : Type) (l : list A) (n i : nat) (x : A),
+  i <> n ->
+  i < length l ->
+  nth_error (firstn n l ++ [x] ++ skipn (n + 1) l) i = nth_error l i.
+Proof.
+    intros A l n i x hNeq hLt.
+    destruct (PeanoNat.Nat.lt_trichotomy i n) as [Hlt_n| [Heq | Hgt_n]].
+    - (* i < n *)
+      rewrite nth_error_app1.
+      + rewrite nth_error_firstn. 
+        apply PeanoNat.Nat.ltb_lt in Hlt_n. 
+        rewrite Hlt_n.
+        reflexivity.
+      + rewrite length_firstn. lia.
+    - (* i = n *) contradiction.
+    - (* i > n *)
+      rewrite nth_error_app2.       
+      + simpl. rewrite length_firstn.
+        assert (Hmin : Nat.min n (length l) = n) by lia.
+        rewrite Hmin.
+          assert (Hi : i - n = S (i - n - 1)) by lia. rewrite Hi. simpl.
+          rewrite nth_error_skipn.
+          f_equal. lia.
+      + rewrite length_firstn. 
+      apply PeanoNat.Nat.min_case_strong; lia.
+Qed.
+
