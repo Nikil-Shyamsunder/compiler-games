@@ -60,12 +60,12 @@ Definition transform_callee_body (body : code) (reg_offset : nat)
                             reg_offset dst succ) body.
 
 (* Inline a single call site within a caller function.
-   - caller: the function containing the call
-   - callee: the leaf function to inline
-   - call_pc: the node in caller where the Icall is
-   - args: argument registers at the call site
-   - dst: destination register for the return value
-   - succ: successor node after the call *)
+
+   Layout:  [patched_caller (len=|caller|)] [param_binds] [callee_body]
+   Indices:  0..call_pc..len-1               len..         len+|binds|..
+
+   Execution: ... -> Inop@call_pc -> param_bind_0 -> ... -> callee_entry -> ... -> Iop Oid@ret -> succ
+*)
 Definition inline_call_site (caller : function) (callee : function)
     (call_pc : nat) (args : list reg) (dst : reg) (succ : node) : code :=
   let reg_offset := max_reg_func caller + 1 in
@@ -73,15 +73,10 @@ Definition inline_call_site (caller : function) (callee : function)
   let param_binds := bind_params args (fn_params callee) reg_offset node_offset in
   let callee_body := transform_callee_body (fn_code callee) reg_offset
                        (node_offset + length param_binds) dst succ in
-  let fix patch (c : list instruction) (pc : nat) :=
-    match c with
-    | [] => []
-    | i :: rest =>
-        (if Nat.eqb pc call_pc then Inop node_offset else i)
-        :: patch rest (pc + 1)
-    end
-  in
-  patch (fn_code caller) 0 ++ param_binds ++ callee_body.
+  let patched_caller := firstn call_pc (fn_code caller)
+                        ++ [Inop node_offset]
+                        ++ skipn (call_pc + 1) (fn_code caller) in
+  patched_caller ++ param_binds ++ callee_body.
 
 (* Inline a specific call site (identified by pc) within a function.
    Returns None if the pc doesn't point to an Icall. *)
@@ -128,6 +123,7 @@ Lemma nth_error_replace_other : forall (A : Type) (l : list A) (n i : nat) (x : 
   nth_error (firstn n l ++ [x] ++ skipn (n + 1) l) i = nth_error l i.
 Proof.
     intros A l n i x hNeq hLt.
+    (* FIXME: why are Nat lemmas only resolving with PeanoNat.{}? *)
     destruct (PeanoNat.Nat.lt_trichotomy i n) as [Hlt_n| [Heq | Hgt_n]].
     - (* i < n *)
       rewrite nth_error_app1.
@@ -147,5 +143,16 @@ Proof.
           f_equal. lia.
       + rewrite length_firstn. 
       apply PeanoNat.Nat.min_case_strong; lia.
+Qed.
+
+Lemma nth_error_replace_same : forall (A : Type) (l : list A) (n : nat) (x : A),
+  n < length l ->
+  nth_error (firstn n l ++ [x] ++ skipn (n + 1) l) n = Some x.
+Proof.
+  intros A l n x Hlt.
+  rewrite nth_error_app2.
+  - rewrite length_firstn. rewrite PeanoNat.Nat.min_l by lia.
+    rewrite PeanoNat.Nat.sub_diag. reflexivity.
+  - rewrite length_firstn. lia.
 Qed.
 
