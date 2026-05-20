@@ -1,5 +1,5 @@
 From VerifPerf Require Import Syntax Semantics Inlining.
-From Stdlib Require Import List Nat Bool Relations Arith.
+From Stdlib Require Import List Nat Bool Relations Arith Lia.
 From Stdlib Require Import PeanoNat.
 Import ListNotations.
 
@@ -110,9 +110,21 @@ Inductive plus (step : state -> state -> Prop) : state -> state -> Prop :=
    | plus_one : forall s1 s2,
       step s1 s2 -> plus step s1 s2
    | plus_step : forall s1 s2 s3,
-      step s1 s2 -> plus step s2 s3 -> plus
-   step s1 s3.
+      step s1 s2 -> plus step s2 s3 -> plus step s1 s3.
 
+(* Tactic to unpack the inline hypothesis without destroying it.
+   Introduces: Htarget, Hleaf, Hcaller_lookup, Hinl_func, Hp' *)
+Ltac unpack_inline :=
+  let H := fresh "Hinl" in
+  pose proof Hinline as H;
+  unfold inline in H;
+  destruct (nth_error p (cs_target cs)) as [callee_f|] eqn:Htarget; [|discriminate];
+  destruct (isLeafb callee_f) eqn:Hleaf; [|discriminate];
+  destruct (nth_error p (cs_caller cs)) as [caller_f|] eqn:Hcaller_lookup; [|discriminate];
+  destruct (inline_in_func caller_f callee_f (cs_pc cs)) as [caller_f'|] eqn:Hinl_func; [|discriminate];
+  assert (Hp' : p' = firstn (cs_caller cs) p ++ [caller_f'] ++ skipn (cs_caller cs + 1) p)
+    by congruence;
+  clear H.
 
 (* Functions not at cs_caller are identical in p and p' *)
 Lemma other_func_preserved : forall i f,
@@ -122,15 +134,22 @@ Lemma other_func_preserved : forall i f,
   nth_error p' i = Some f.
 Proof.
   intros i f hNotCS hLen hf.
-  unfold inline in Hinline.
-  destruct (nth_error p (cs_target cs)) eqn:Htarget; [|discriminate].
-  destruct (isLeafb f0) eqn:Hleaf; [| discriminate].
-  destruct (nth_error p (cs_caller cs)) eqn:Hcaller; [|discriminate].
-  destruct (inline_in_func f1 f0 (cs_pc cs)) eqn:Hinl; [|discriminate].
-  inversion Hinline.
-  (* Inversion is oversimplifying? so we do this annoying replace thing *)
-  replace (f2 :: skipn (cs_caller cs + 1) p) with ([f2] ++ skipn (cs_caller cs + 1) p) by reflexivity.
+  unpack_inline. rewrite Hp'.
+  replace (caller_f' :: skipn (cs_caller cs + 1) p)
+    with ([caller_f'] ++ skipn (cs_caller cs + 1) p) by reflexivity.
   rewrite nth_error_replace_other; assumption.
+Qed.
+
+(* The modified caller exists in p' *)
+Lemma caller_in_p' : exists caller',
+  nth_error p' (cs_caller cs) = Some caller'.
+Proof.
+  unpack_inline. rewrite Hp'.
+  eexists.
+  replace (caller_f' :: skipn (cs_caller cs + 1) p)
+    with ([caller_f'] ++ skipn (cs_caller cs + 1) p) by reflexivity.
+  apply nth_error_replace_same.
+  apply nth_error_Some. congruence.
 Qed.
 
 (* Instructions in the caller at PCs other than cs_pc are preserved *)
@@ -140,6 +159,19 @@ Lemma other_pc_preserved : forall pc i,
   exists caller', nth_error p' (cs_caller cs) = Some caller' /\
   nth_error (fn_code caller') pc = Some i.
 Proof.
+  (* TODO: can some duplicate code be replaced by caller_in_p' ? *)
+  unpack_inline. rewrite Hp'.
+  exists caller_f'.
+  replace (caller_f' :: skipn (cs_caller cs + 1) p)
+      with ([caller_f'] ++ skipn (cs_caller cs + 1) p) by reflexivity.
+  split.
+  - apply nth_error_replace_same. apply nth_error_Some. congruence.
+
+  (* the target fn at `pc` is same as source fn at `pc`, `pc <> cs`.
+     Proof sketch: unfold inline_in_func to get fn_code caller_f',
+     then use nth_error_app1 (pc < length patched_caller)
+     and nth_error_replace_other (pc <> cs_pc cs). *)
+  - admit.
 Admitted.
 
 (* The inlined program preserves function lookup for non-inlined calls *)
@@ -148,7 +180,11 @@ Lemma find_func_preserved : forall target fd,
   nth_error p' target = Some fd \/
   (target = cs_caller cs /\ exists fd', nth_error p' target = Some fd').
 Proof.
-Admitted.
+  intros target fd Hlookup.
+  destruct (Nat.eq_dec target (cs_caller cs)) as [Heq | Hneq].
+  - right. split; auto. destruct caller_in_p' as [c' Hc']. rewrite Heq. eauto.
+  - left. eapply other_func_preserved; eauto. apply nth_error_Some. congruence.
+Qed.
 
 (* Code at a pc is preserved if it's not the inlined site in the caller *)
 Lemma code_at_pc_preserved : forall fi f_src f_tgt pc instr,
