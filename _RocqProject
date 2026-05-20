@@ -1,2 +1,5 @@
 -R theories VerifPerf
-
+theories/Syntax.v
+theories/Semantics.v
+theories/Inlining.v
+theories/InliningProof.v
