@@ -156,3 +156,67 @@ Proof.
   - rewrite length_firstn. lia.
 Qed.
 
+Definition used_regs (i : instruction) : list reg :=
+  match i with
+  | Inop _ => []
+  | Iop _ args dst _ => dst :: args
+  | Icond cond _ _ => [cond]
+  | Icall _ args dst _ => dst :: args
+  | Iret src => [src]
+  end.
+
+(* `fold_left` of `max` returns at least of the base value acc *)
+Lemma fold_left_max_acc : forall l acc, acc <=
+  fold_left max l acc.
+  Proof.
+    induction l; simpl; intros.
+    - lia.
+    - eapply PeanoNat.Nat.le_trans. 2: apply IHl.
+  lia.
+Qed.
+
+(* `fold_left` of `max` returns something >= any value in the list *)
+Lemma fold_left_max_in : forall l acc r,
+  In r l -> r <= fold_left max l acc.
+Proof.
+  induction l. simpl; intros.
+  - lia.
+  - intros acc r h. destruct h.
+    (* a = r *)
+    + rewrite <- H. simpl. eapply PeanoNat.Nat.le_trans. 
+      apply PeanoNat.Nat.le_max_r. apply fold_left_max_acc.
+    (* In r l *)
+    + apply IHl. assumption.
+Qed.
+
+Lemma max_reg_instr_args : forall instr r,
+  In r (used_regs instr) -> r <= max_reg_instr instr.
+Proof.
+  intros instr r hIn.
+  unfold max_reg_instr.
+  destruct instr; simpl in hIn; try contradiction;
+    destruct hIn;
+    first [ subst; apply fold_left_max_acc
+          | apply fold_left_max_in; assumption
+          | lia
+          | contradiction ].
+Qed.
+
+Lemma max_reg_func_bound : forall f instr pc,
+  nth_error (fn_code f) pc = Some instr ->
+  max_reg_instr instr <= max_reg_func f.
+Proof.
+  intros f instr pc hInstr.
+  unfold max_reg_func.
+Qed.
+
+Lemma instr_regs_bounded : forall f pc instr r,
+  nth_error (fn_code f) pc = Some instr ->
+  In r (used_regs instr) ->
+  r <= max_reg_func f.
+Proof.
+  intros. eapply PeanoNat.Nat.le_trans.
+  - eapply max_reg_instr_args; eauto.
+  - eapply max_reg_func_bound; eauto.
+Qed.
+

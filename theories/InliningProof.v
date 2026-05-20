@@ -184,6 +184,72 @@ Proof.
     exact Hcode.
 Qed.
 
+(* The instruction at cs_pc is always an Icall *)
+Lemma cs_pc_is_call : forall f_src,
+  nth_error p (cs_caller cs) = Some f_src ->
+  exists target args dst succ,
+    nth_error (fn_code f_src) (cs_pc cs) = Some (Icall target args dst succ).
+Proof.
+  intros f_src Hf. unpack_inline.
+  unfold inline_in_func in Hinl_func.
+  replace f_src with caller_f by congruence.
+  destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [[]|] eqn:E;
+    try discriminate.
+  eauto.
+Qed.
+
+(* Non-Icall instructions can't be at cs_pc in the caller *)
+Lemma pc_ne_cs_pc : forall fi f_src pc instr,
+  nth_error p fi = Some f_src ->
+  nth_error (fn_code f_src) pc = Some instr ->
+  (forall t a d s, instr <> Icall t a d s) ->
+  fi <> cs_caller cs \/ pc <> cs_pc cs.
+Proof.
+  intros fi f_src pc instr Hfi Hpc Hnot_call.
+  destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq | Hneq]; [|left; auto].
+  right. subst fi.
+  destruct (cs_pc_is_call f_src Hfi) as [t [a [d [s Hcall]]]].
+  intro Heq. subst pc. rewrite Hpc in Hcall.
+  injection Hcall. intros. subst. eapply Hnot_call. reflexivity.
+Qed.
+
+Ltac solve_code_preserved :=
+  eapply code_at_pc_preserved; eauto;
+  eapply pc_ne_cs_pc; eauto; intros; discriminate.
+
+(* When regs_agree and we're in the caller, registers used in an instruction agree *)
+Lemma regs_agree_on_instr : forall rs_src rs_tgt f pc instr r,
+  regs_agree rs_src rs_tgt ->
+  nth_error p (cs_caller cs) = Some f ->
+  nth_error (fn_code f) pc = Some instr ->
+  In r (used_regs instr) ->
+  rs_src r = rs_tgt r.
+Proof.
+  intros rs_src rs_tgt f pc instr r Hagree Hf Hpc Hin.
+  apply Hagree.
+  assert (r <= max_reg_func f) by (eapply instr_regs_bounded; eauto).
+  unfold caller. rewrite Hf. exact H.
+Qed.
+
+Lemma map_regs_agree : forall rs_src rs_tgt f pc args dst op succ,
+  regs_agree rs_src rs_tgt ->
+  nth_error p (cs_caller cs) = Some f ->
+  nth_error (fn_code f) pc = Some (Iop op args dst succ) ->
+  map_regs rs_src args = map_regs rs_tgt args.
+Proof.
+  intros. unfold map_regs. apply map_ext_in. intros r Hr.
+  eapply regs_agree_on_instr; eauto. simpl. right. exact Hr.
+Qed.
+
+(* For non-caller functions, rs_src = rs_tgt *)
+Ltac solve_rs_eq :=
+  match goal with
+  | [ H : ?fi <> cs_caller cs -> ?rs_src = ?rs_tgt,
+      Hneq : ?fi <> cs_caller cs |- _ ] =>
+      let Hrs := fresh "Hrs" in
+      assert (Hrs : rs_src = rs_tgt) by auto; subst rs_tgt
+  end.
+
 (** * Forward simulation *)
 
 Theorem step_simulation:
@@ -193,22 +259,38 @@ Theorem step_simulation:
     exists s2', plus (step p') s2 s2' /\ match_states s1' s2'.
 Proof.
   intros s1 s1' s2 Hmatch Hstep.
-  inv Hmatch; inv Hstep; try (eexists; split;
-    [ apply plus_one; econstructor; eauto
-    | econstructor; eauto ]; fail).
+  inv Hmatch; inv Hstep.
+
+  (* === match_normal, non-caller, non-Icall: dispatch with rs equality === *)
+
+  all: try (
+    match goal with
+    | [ H1 : (?fi <> cs_caller cs -> ?rs_src = ?rs_tgt),
+        H2 : nth_error p ?fi = Some ?f_src,
+        H3 : nth_error p' ?fi = Some ?f_tgt,
+        H8 : nth_error (fn_code ?f_src) ?pc = Some ?instr |- _ ] =>
+        destruct (Nat.eq_dec fi (cs_caller cs)) as [?Hcaller | ?Hother];
+        [ 
+          (* Dispatches all cases in the caller, but outside hte inlined region *)
+          admit
+          (* Dispatches all cases outside of the caller with an inlined callee *)
+          | assert (rs_src = rs_tgt) by auto; subst rs_tgt;
+            eexists; split;
+            [ apply plus_one; econstructor; [solve_code_preserved | eauto ..]
+            | econstructor; eauto ]
+        ]
+    end; fail).
+
+  (* Remaining: Icall, return/callstate, inlined cases *)
 
   - (* exec_Icall at normal *)
     destruct (Nat.eq_dec pc (cs_pc cs)) as [Hinl | Hnotinl].
     + (* inlined call site *) admit.
-    + (* different call site *) 
-      eexists. split; 
-      try (apply plus_one; econstructor; eauto). 
-      apply (code_at_pc_preserved fi f_src _ _ ((Inop pc'))); try assumption.
-      right. assumption. apply (match_normal _ _ fi _ _ _ _ _); assumption.
- 
-  - (* exec_Iret at normal *) admit.
+    + (* different call site *) admit.
 
   - (* exec_return at match_returnstate *) admit.
+  - (* exec_function_entry at match_callstate *) admit.
+
   - (* exec_Inop inside inlined body *) admit.
   - (* exec_Iop inside inlined body *) admit.
   - (* exec_Icond_true inside inlined body *) admit.
