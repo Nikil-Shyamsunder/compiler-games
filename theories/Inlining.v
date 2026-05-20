@@ -74,8 +74,8 @@ Definition inline_call_site (caller : function) (callee : function)
   let callee_body := transform_callee_body (fn_code callee) reg_offset
                        (node_offset + length param_binds) dst succ in
   let patched_caller := firstn call_pc (fn_code caller)
-                        ++ [Inop node_offset]
-                        ++ skipn (call_pc + 1) (fn_code caller) in
+                        ++ Inop node_offset
+                        :: skipn (call_pc + 1) (fn_code caller) in
   patched_caller ++ param_binds ++ callee_body.
 
 (* Inline a specific call site (identified by pc) within a function.
@@ -120,7 +120,7 @@ Definition inline (p : program) (cs : callsite) : option program :=
 Lemma nth_error_replace_other : forall (A : Type) (l : list A) (n i : nat) (x : A),
   i <> n ->
   i < length l ->
-  nth_error (firstn n l ++ [x] ++ skipn (n + 1) l) i = nth_error l i.
+  nth_error (firstn n l ++ x :: skipn (n + 1) l) i = nth_error l i.
 Proof.
     intros A l n i x hNeq hLt.
     (* FIXME: why are Nat lemmas only resolving with PeanoNat.{}? *)
@@ -147,7 +147,7 @@ Qed.
 
 Lemma nth_error_replace_same : forall (A : Type) (l : list A) (n : nat) (x : A),
   n < length l ->
-  nth_error (firstn n l ++ [x] ++ skipn (n + 1) l) n = Some x.
+  nth_error (firstn n l ++ x :: skipn (n + 1) l) n = Some x.
 Proof.
   intros A l n x Hlt.
   rewrite nth_error_app2.
