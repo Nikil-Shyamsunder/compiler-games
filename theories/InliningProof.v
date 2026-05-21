@@ -36,12 +36,13 @@ Definition regs_agree (rs_src rs_tgt : regset) : Prop :=
 Inductive match_stacks : list stackframe -> list stackframe -> Prop :=
   | match_stacks_nil :
       match_stacks nil nil
-  | match_stacks_cons : forall dst f pc rs_src rs_tgt s_src s_tgt,
+  | match_stacks_cons : forall dst fi f_src f_tgt pc rs_src rs_tgt s_src s_tgt,
       regs_agree rs_src rs_tgt ->
+      nth_error p fi = Some f_src ->
+      nth_error p' fi = Some f_tgt ->
       match_stacks s_src s_tgt ->
-      (* if the stacks `s_src` and `s_tgt` agree, we can add a new stackframe *)
-      match_stacks (Stackframe dst f pc rs_src :: s_src)
-                   (Stackframe dst f pc rs_tgt :: s_tgt).
+      match_stacks (Stackframe dst f_src pc rs_src :: s_src)
+                   (Stackframe dst f_tgt pc rs_tgt :: s_tgt).
 
 Inductive match_states : state -> state -> Prop :=
   (* TODO: potentially needs strengthening?
@@ -66,10 +67,12 @@ Inductive match_states : state -> state -> Prop :=
         (State ((Stackframe dst caller ret_pc rs_caller_src) :: s_src)
                callee pc_callee rs_callee_src)
         (State s_tgt caller (pc_callee + node_offset) rs_tgt)
-  | match_callstate : forall s_src s_tgt f args,
+  | match_callstate : forall s_src s_tgt fi f_src f_tgt args,
       match_stacks s_src s_tgt ->
-      match_states (Callstate s_src f args)
-                   (Callstate s_tgt f args)
+      nth_error p fi = Some f_src ->
+      nth_error p' fi = Some f_tgt ->
+      match_states (Callstate s_src f_src args)
+                   (Callstate s_tgt f_tgt args)
   | match_returnstate : forall s_src s_tgt v,
       match_stacks s_src s_tgt ->
       match_states (Returnstate s_src v)
@@ -312,18 +315,35 @@ Proof.
                 - assert (rs_src = rs_tgt) by auto. subst. reflexivity.
               }
               rewrite <- Hmap.
-            apply (match_callstate _ _ fd _).  
-            Check match_stacks_cons.
-            apply match_stacks_cons.
+            eapply (match_callstate _ _ target fd fd); eauto.
+            eapply match_stacks_cons; eauto.
+            (* regs_agree for the saved frame *)
+            destruct (Nat.eq_dec fi (cs_caller cs)); auto.
+            unfold regs_agree. intros.
+            assert (rs_src = rs_tgt) by auto. subst. reflexivity.
           (* ++ eapply match_callstate. eapply match_stacks_cons; eauto. *)
         * (* target = cs_caller cs: fd' is the modified caller *)
-          exists (Callstate (Stackframe dst f_tgt pc' rs_tgt :: s_tgt) fd' (map_regs rs_tgt
-        args)).
+          subst target.
+          exists (Callstate (Stackframe dst f_tgt pc' rs_tgt :: s_tgt) fd' (map_regs rs_tgt args)).
           split.
-          ++ apply plus_one. eapply exec_Icall; eauto.
-            eapply code_at_pc_preserved; eauto. right. assumption.
-            rewrite Heq. exact Hfd'.
-          ++ eapply match_callstate. eapply match_stacks_cons; eauto.
+          ++ apply plus_one. apply (exec_Icall _ _ _ _ _ (cs_caller cs) _ _ _ _).
+             apply (code_at_pc_preserved fi f_src f_tgt _ _); try assumption. right; assumption.
+             exact Hfd'.
+          ++ assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
+             { destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother].
+               - apply (map_regs_agree rs_src rs_tgt f_src pc (Icall (cs_caller cs) args dst pc')).
+                 auto. rewrite <- Hcaller. assumption. assumption. intros.
+                 simpl. right. assumption.
+               - assert (rs_src = rs_tgt) by auto. subst. reflexivity.
+             }
+             rewrite <- Hmap.
+             eapply (match_callstate _ _ (cs_caller cs) fd fd').
+             ** eapply match_stacks_cons; eauto.
+                destruct (Nat.eq_dec fi (cs_caller cs)); auto.
+                unfold regs_agree. intros.
+                assert (rs_src = rs_tgt) by auto. subst. reflexivity.
+             ** exact H10.
+             ** exact Hfd'.
   - (* exec_Iret, caller *) admit.
 
   (* === match_callstate === *)
