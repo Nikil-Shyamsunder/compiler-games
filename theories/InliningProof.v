@@ -286,8 +286,22 @@ Proof.
 
   (* === match_normal, caller cases (fi = cs_caller cs) === *)
 
-  - (* exec_Inop, caller *) admit.
-  - (* exec_Iop, caller *) admit.
+  - (* exec_Inop, caller *) 
+    exists (State s_tgt f_tgt pc' rs_tgt). split.
+    apply plus_one. apply exec_Inop. apply (code_at_pc_preserved fi f_src); try assumption. 
+    apply (pc_ne_cs_pc _ f_src _ (Inop pc')); try assumption. discriminate.
+    apply (match_normal _ _ fi); try assumption.
+
+  - (* exec_Iop, caller *)
+    set (s2' := (State s_tgt f_tgt pc' (update rs_tgt dst v))).
+    exists s2'. split.
+    apply plus_one. 
+    (* Check exec_Iop. *)
+    apply (exec_Iop _ _ _ _ _ op args). apply (code_at_pc_preserved fi f_src); try assumption.
+    apply (pc_ne_cs_pc _ f_src _ (Iop op args dst pc')); try assumption. discriminate.
+    admit. (* need Hcaller but its lost in the all: *)
+    (* apply (match_normal _ _ fi); try assumption. *)
+
   - (* exec_Icond_true, caller *) admit.
   - (* exec_Icond_false, caller *) admit.
   - (* exec_Icall, normal *)
