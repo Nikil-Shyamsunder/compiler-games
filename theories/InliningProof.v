@@ -293,57 +293,29 @@ Proof.
   - (* exec_Icall, normal *)
     destruct (Nat.eq_dec pc (cs_pc cs)) as [Hinl | Hnotinl].
     + (* inlined call site *) admit.
-    + (* different call site *) 
-      destruct (find_func_preserved _ _ H10) as [Hfd | [Heq [fd' Hfd']]].
-        * (* target <> cs_caller cs: fd unchanged in p' *)
-          exists (Callstate (Stackframe dst f_tgt pc' rs_tgt :: s_tgt) fd (map_regs rs_tgt args)).
-          split.
-          Check exec_Icall.
-          ++ apply plus_one. apply (exec_Icall _ _ _ _ _ target _ _ _ _).
-          Check code_at_pc_preserved.
-          apply (code_at_pc_preserved fi f_src f_tgt _ _); try assumption. right; assumption.
-          assumption.
-          
-          ++ Check match_callstate. 
-            simpl in Hnotinl.
-            Check map_regs_agree.
-              assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
-              { destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother].
-                - apply (map_regs_agree rs_src rs_tgt f_src pc (Icall target args dst pc')).
-                  auto. rewrite <- Hcaller. assumption. assumption. intros.
-                  simpl. right. assumption.
-                - assert (rs_src = rs_tgt) by auto. subst. reflexivity.
-              }
-              rewrite <- Hmap.
-            eapply (match_callstate _ _ target fd fd); eauto.
-            eapply match_stacks_cons; eauto.
-            (* regs_agree for the saved frame *)
-            destruct (Nat.eq_dec fi (cs_caller cs)); auto.
-            unfold regs_agree. intros.
-            assert (rs_src = rs_tgt) by auto. subst. reflexivity.
-          (* ++ eapply match_callstate. eapply match_stacks_cons; eauto. *)
-        * (* target = cs_caller cs: fd' is the modified caller *)
-          subst target.
-          exists (Callstate (Stackframe dst f_tgt pc' rs_tgt :: s_tgt) fd' (map_regs rs_tgt args)).
-          split.
-          ++ apply plus_one. apply (exec_Icall _ _ _ _ _ (cs_caller cs) _ _ _ _).
-             apply (code_at_pc_preserved fi f_src f_tgt _ _); try assumption. right; assumption.
-             exact Hfd'.
-          ++ assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
-             { destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother].
-               - apply (map_regs_agree rs_src rs_tgt f_src pc (Icall (cs_caller cs) args dst pc')).
-                 auto. rewrite <- Hcaller. assumption. assumption. intros.
-                 simpl. right. assumption.
-               - assert (rs_src = rs_tgt) by auto. subst. reflexivity.
-             }
-             rewrite <- Hmap.
-             eapply (match_callstate _ _ (cs_caller cs) fd fd').
-             ** eapply match_stacks_cons; eauto.
-                destruct (Nat.eq_dec fi (cs_caller cs)); auto.
-                unfold regs_agree. intros.
-                assert (rs_src = rs_tgt) by auto. subst. reflexivity.
-             ** exact H10.
-             ** exact Hfd'.
+    + (* different call site *)
+      (* Get the target function in p' *)
+      assert (Htgt_in_p' : exists fd_tgt, nth_error p' target = Some fd_tgt).
+      { destruct (find_func_preserved _ _ H10) as [Hfd | [_ [fd' Hfd']]];
+        eauto. }
+      destruct Htgt_in_p' as [fd_tgt Hfd_tgt].
+      (* Registers agree on args *)
+      assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
+      { destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother].
+        - eapply (map_regs_agree _ _ f_src pc (Icall target args dst pc'));
+          auto. rewrite <- Hcaller. assumption. intros. simpl. right. assumption.
+        - assert (rs_src = rs_tgt) by auto. subst. reflexivity. }
+      (* Construct the step and match *)
+      assert (Hcode_tgt : nth_error (fn_code f_tgt) pc = Some (Icall target args dst pc')).
+      { apply (code_at_pc_preserved fi f_src f_tgt pc _ H2 H3 (or_intror Hnotinl) H9). }
+      eexists. split.
+      * apply plus_one. eapply exec_Icall; eauto.
+      * rewrite <- Hmap.
+        eapply (match_callstate _ _ target); eauto.
+        eapply match_stacks_cons; eauto.
+        destruct (Nat.eq_dec fi (cs_caller cs)); auto.
+        unfold regs_agree. intros.
+        assert (rs_src = rs_tgt) by auto. subst. reflexivity.
   - (* exec_Iret, caller *) admit.
 
   (* === match_callstate === *)
