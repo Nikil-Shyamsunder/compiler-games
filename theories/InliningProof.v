@@ -370,7 +370,18 @@ Proof.
         destruct (Nat.eq_dec fi (cs_caller cs)); auto.
         unfold regs_agree. intros.
         assert (rs_src = rs_tgt) by auto. subst. reflexivity.
-  - (* exec_Iret, caller *) admit.
+  
+  - (* exec_Iret, caller *)
+  exists (Returnstate s_tgt (rs_tgt src)). split.
+  apply plus_one. apply exec_Iret. apply (code_at_pc_preserved fi f_src); try assumption. 
+  apply (pc_ne_cs_pc fi f_src _ (Iret src)); try assumption. discriminate.
+  
+  (* match states *)
+  replace (rs_src src) with (rs_tgt src).
+  apply (match_returnstate); assumption.
+  unfold regs_agree in H1. symmetry.
+  apply H1. assumption. apply (max_reg_func_bound _ (Iret src) pc).
+  unfold caller. rewrite <- Hcaller. rewrite H2. exact H9. 
 
   (* === match_callstate === *)
   - (* exec_function_entry *) admit.
