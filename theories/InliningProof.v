@@ -235,6 +235,14 @@ Proof.
   unfold caller. rewrite Hf. exact H.
 Qed.
 
+Lemma regs_agree_update : forall rs_src rs_tgt dst v,
+  regs_agree rs_src rs_tgt ->
+  regs_agree (update rs_src dst v) (update rs_tgt dst v).
+Proof.
+  unfold regs_agree, update. intros.
+  destruct (Nat.eqb r dst); auto.
+Qed.
+
 Lemma map_regs_agree : forall rs_src rs_tgt f pc instr args,
   regs_agree rs_src rs_tgt ->
   nth_error p (cs_caller cs) = Some f ->
@@ -267,23 +275,21 @@ Proof.
   inv Hmatch; inv Hstep.
 
   (* Dispatch non-caller cases for non-Icall match_normal *)
-  all: try (
-    match goal with
-    | [ H1 : (?fi <> cs_caller cs -> ?rs_src = ?rs_tgt),
-        H2 : nth_error p ?fi = Some ?f_src,
-        H3 : nth_error p' ?fi = Some ?f_tgt,
-        H8 : nth_error (fn_code ?f_src) ?pc = Some ?instr |- _ ] =>
-        destruct (Nat.eq_dec fi (cs_caller cs)) as [?Hcaller | ?Hother];
-        [ (* caller case: need register reasoning -- left explicit below *)
-          idtac
-        | (* non-caller case: rs equality, done *)
-          assert (rs_src = rs_tgt) by auto; subst rs_tgt;
-          eexists; split;
-          [ apply plus_one; econstructor; [solve_code_preserved | eauto ..]
-          | econstructor; eauto ]
-        ]
-    end; fail).
-
+  all: try match goal with
+  | [ H1 : (?fi <> cs_caller cs -> ?rs_src = ?rs_tgt),
+      H2 : nth_error p ?fi = Some ?f_src,
+      H3 : nth_error p' ?fi = Some ?f_tgt,
+      H8 : nth_error (fn_code ?f_src) ?pc = Some ?instr |- _ ] =>
+      destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother];
+      [ (* caller case: leave for manual proof with Hcaller in scope *)
+        idtac
+      | (* non-caller case: rs equality, done *)
+        assert (rs_src = rs_tgt) by auto; subst rs_tgt;
+        eexists; split;
+        [ apply plus_one; econstructor; [solve_code_preserved | eauto ..]
+        | econstructor; eauto; try tauto ]
+      ]
+  end.
   (* === match_normal, caller cases (fi = cs_caller cs) === *)
 
   - (* exec_Inop, caller *) 
@@ -293,17 +299,51 @@ Proof.
     apply (match_normal _ _ fi); try assumption.
 
   - (* exec_Iop, caller *)
-    set (s2' := (State s_tgt f_tgt pc' (update rs_tgt dst v))).
-    exists s2'. split.
+    exists (State s_tgt f_tgt pc' (update rs_tgt dst v)). split.
+
+    (* step reaches new state *)
     apply plus_one. 
-    (* Check exec_Iop. *)
     apply (exec_Iop _ _ _ _ _ op args). apply (code_at_pc_preserved fi f_src); try assumption.
     apply (pc_ne_cs_pc _ f_src _ (Iop op args dst pc')); try assumption. discriminate.
-    admit. (* need Hcaller but its lost in the all: *)
-    (* apply (match_normal _ _ fi); try assumption. *)
+    specialize (H1 Hcaller) as Hagree.
+    replace (map_regs rs_tgt args) with (map_regs rs_src args). exact H10.
+    apply (map_regs_agree _ _ f_src pc (Iop op args dst pc')); auto.
+    rewrite <- Hcaller. assumption. intros. simpl. right. assumption.
 
-  - (* exec_Icond_true, caller *) admit.
-  - (* exec_Icond_false, caller *) admit.
+    (* match states *)
+    apply (match_normal _ _ fi); try assumption; intros.
+    contradiction. 
+    apply regs_agree_update, H1, Hcaller.
+
+  - (* exec_Icond_true, caller *) 
+    exists (State s_tgt f_tgt ifso rs_tgt). split.
+    apply plus_one. apply (exec_Icond_true _ _ _ _ _ cond _ ifnot).
+    apply (code_at_pc_preserved fi f_src); try assumption.
+    apply (pc_ne_cs_pc _ f_src _ (Icond cond ifso ifnot)); try assumption. discriminate.
+    replace (rs_tgt cond) with (rs_src cond). exact H10.
+    unfold regs_agree in H1.
+    apply H1. assumption. 
+    apply (max_reg_func_bound _ (Icond cond ifso ifnot) pc). 
+    unfold caller. rewrite <- Hcaller. rewrite H2. exact H9.
+
+    (* match states *)
+    apply (match_normal _ _ fi); assumption.
+
+  - (* exec_Icond_false, caller *)
+    exists (State s_tgt f_tgt ifnot rs_tgt). split.
+    apply plus_one. apply (exec_Icond_false _ _ _ _ _ cond ifso).
+    apply (code_at_pc_preserved fi f_src); try assumption.
+    apply (pc_ne_cs_pc _ f_src _ (Icond cond ifso ifnot)); try assumption. discriminate.
+    replace (rs_tgt cond) with (rs_src cond). 
+    unfold regs_agree in H1.
+    assumption.
+    apply H1. apply Hcaller.
+    apply (max_reg_func_bound _ (Icond cond ifso ifnot) pc). 
+    unfold caller. rewrite <- Hcaller. rewrite H2. exact H9.
+
+    (* match states *)
+    apply (match_normal _ _ fi); assumption.
+
   - (* exec_Icall, normal *)
     destruct (Nat.eq_dec pc (cs_pc cs)) as [Hinl | Hnotinl].
     + (* inlined call site *) admit.
