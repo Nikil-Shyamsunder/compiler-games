@@ -1,3 +1,1 @@
-**Insert fancy name here? **
-
 Playing around with formally verifying the correctness of a function inlining pass, and proving an optimality bound on the inlining heuristic relative to a cost model on the I-Cache using smoothness-theorems for Price of Anarchy bounds.
