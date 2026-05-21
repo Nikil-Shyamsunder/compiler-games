@@ -202,12 +202,34 @@ Proof.
           | contradiction ].
 Qed.
 
+Lemma fold_left_max_fun_acc : forall (A : Type) (g : A -> nat) l acc,
+  acc <= fold_left (fun a i => max a (g i)) l acc.
+Proof.
+  induction l; simpl; intros.
+  - lia.
+  - eapply PeanoNat.Nat.le_trans. 2: apply IHl. lia.
+Qed.
+
+Lemma fold_left_max_fun_in : forall (A : Type) (g : A -> nat) l acc x,
+  In x l -> g x <= fold_left (fun a i => max a (g i)) l acc.
+Proof.
+  induction l; simpl; intros.
+  - contradiction.
+  - destruct H.
+    + subst. eapply PeanoNat.Nat.le_trans.
+      2: apply fold_left_max_fun_acc.
+      lia.
+    + apply IHl. assumption.
+Qed.
+
 Lemma max_reg_func_bound : forall f instr pc,
   nth_error (fn_code f) pc = Some instr ->
   max_reg_instr instr <= max_reg_func f.
 Proof.
   intros f instr pc hInstr.
   unfold max_reg_func.
+  apply fold_left_max_fun_in.
+  eapply nth_error_In; eauto.
 Qed.
 
 Lemma instr_regs_bounded : forall f pc instr r,

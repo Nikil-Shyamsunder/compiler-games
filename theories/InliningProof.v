@@ -39,6 +39,7 @@ Inductive match_stacks : list stackframe -> list stackframe -> Prop :=
   | match_stacks_cons : forall dst f pc rs_src rs_tgt s_src s_tgt,
       regs_agree rs_src rs_tgt ->
       match_stacks s_src s_tgt ->
+      (* if the stacks `s_src` and `s_tgt` agree, we can add a new stackframe *)
       match_stacks (Stackframe dst f pc rs_src :: s_src)
                    (Stackframe dst f pc rs_tgt :: s_tgt).
 
@@ -231,14 +232,15 @@ Proof.
   unfold caller. rewrite Hf. exact H.
 Qed.
 
-Lemma map_regs_agree : forall rs_src rs_tgt f pc args dst op succ,
+Lemma map_regs_agree : forall rs_src rs_tgt f pc instr args,
   regs_agree rs_src rs_tgt ->
   nth_error p (cs_caller cs) = Some f ->
-  nth_error (fn_code f) pc = Some (Iop op args dst succ) ->
+  nth_error (fn_code f) pc = Some instr ->
+  (forall r, In r args -> In r (used_regs instr)) ->
   map_regs rs_src args = map_regs rs_tgt args.
 Proof.
   intros. unfold map_regs. apply map_ext_in. intros r Hr.
-  eapply regs_agree_on_instr; eauto. simpl. right. exact Hr.
+  eapply regs_agree_on_instr; eauto.
 Qed.
 
 (* For non-caller functions, rs_src = rs_tgt *)
@@ -261,8 +263,7 @@ Proof.
   intros s1 s1' s2 Hmatch Hstep.
   inv Hmatch; inv Hstep.
 
-  (* === match_normal, non-caller, non-Icall: dispatch with rs equality === *)
-
+  (* Dispatch non-caller cases for non-Icall match_normal *)
   all: try (
     match goal with
     | [ H1 : (?fi <> cs_caller cs -> ?rs_src = ?rs_tgt),
@@ -270,27 +271,68 @@ Proof.
         H3 : nth_error p' ?fi = Some ?f_tgt,
         H8 : nth_error (fn_code ?f_src) ?pc = Some ?instr |- _ ] =>
         destruct (Nat.eq_dec fi (cs_caller cs)) as [?Hcaller | ?Hother];
-        [ 
-          (* Dispatches all cases in the caller, but outside hte inlined region *)
-          admit
-          (* Dispatches all cases outside of the caller with an inlined callee *)
-          | assert (rs_src = rs_tgt) by auto; subst rs_tgt;
-            eexists; split;
-            [ apply plus_one; econstructor; [solve_code_preserved | eauto ..]
-            | econstructor; eauto ]
+        [ (* caller case: need register reasoning -- left explicit below *)
+          idtac
+        | (* non-caller case: rs equality, done *)
+          assert (rs_src = rs_tgt) by auto; subst rs_tgt;
+          eexists; split;
+          [ apply plus_one; econstructor; [solve_code_preserved | eauto ..]
+          | econstructor; eauto ]
         ]
     end; fail).
 
-  (* Remaining: Icall, return/callstate, inlined cases *)
+  (* === match_normal, caller cases (fi = cs_caller cs) === *)
 
-  - (* exec_Icall at normal *)
+  - (* exec_Inop, caller *) admit.
+  - (* exec_Iop, caller *) admit.
+  - (* exec_Icond_true, caller *) admit.
+  - (* exec_Icond_false, caller *) admit.
+  - (* exec_Icall, normal *)
     destruct (Nat.eq_dec pc (cs_pc cs)) as [Hinl | Hnotinl].
     + (* inlined call site *) admit.
-    + (* different call site *) admit.
+    + (* different call site *) 
+      destruct (find_func_preserved _ _ H10) as [Hfd | [Heq [fd' Hfd']]].
+        * (* target <> cs_caller cs: fd unchanged in p' *)
+          exists (Callstate (Stackframe dst f_tgt pc' rs_tgt :: s_tgt) fd (map_regs rs_tgt args)).
+          split.
+          Check exec_Icall.
+          ++ apply plus_one. apply (exec_Icall _ _ _ _ _ target _ _ _ _).
+          Check code_at_pc_preserved.
+          apply (code_at_pc_preserved fi f_src f_tgt _ _); try assumption. right; assumption.
+          assumption.
+          
+          ++ Check match_callstate. 
+            simpl in Hnotinl.
+            Check map_regs_agree.
+              assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
+              { destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother].
+                - apply (map_regs_agree rs_src rs_tgt f_src pc (Icall target args dst pc')).
+                  auto. rewrite <- Hcaller. assumption. assumption. intros.
+                  simpl. right. assumption.
+                - assert (rs_src = rs_tgt) by auto. subst. reflexivity.
+              }
+              rewrite <- Hmap.
+            apply (match_callstate _ _ fd _).  
+            Check match_stacks_cons.
+            apply match_stacks_cons.
+          (* ++ eapply match_callstate. eapply match_stacks_cons; eauto. *)
+        * (* target = cs_caller cs: fd' is the modified caller *)
+          exists (Callstate (Stackframe dst f_tgt pc' rs_tgt :: s_tgt) fd' (map_regs rs_tgt
+        args)).
+          split.
+          ++ apply plus_one. eapply exec_Icall; eauto.
+            eapply code_at_pc_preserved; eauto. right. assumption.
+            rewrite Heq. exact Hfd'.
+          ++ eapply match_callstate. eapply match_stacks_cons; eauto.
+  - (* exec_Iret, caller *) admit.
 
-  - (* exec_return at match_returnstate *) admit.
-  - (* exec_function_entry at match_callstate *) admit.
+  (* === match_callstate === *)
+  - (* exec_function_entry *) admit.
 
+  (* === match_returnstate === *)
+  - (* exec_return *) admit.
+
+  (* === match_inlined cases === *)
   - (* exec_Inop inside inlined body *) admit.
   - (* exec_Iop inside inlined body *) admit.
   - (* exec_Icond_true inside inlined body *) admit.
