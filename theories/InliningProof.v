@@ -492,10 +492,63 @@ Proof.
       exact Hcode.
     + eapply match_inlined; eauto.
     
-  - (* exec_Iop inside inlined body *) admit.
-  - (* exec_Icond_true inside inlined body *) admit.
-  - (* exec_Icond_false inside inlined body *) admit.
-  - (* exec_Icall inside inlined body: impossible *) exfalso. admit.
+  - (* exec_Iop inside inlined body *)
+    exists (State s_tgt caller_tgt (pc' + node_offset) (update rs_tgt (dst0 + reg_offset) v)).
+    split.
+    + apply plus_one.
+      destruct (inlined_body_at pc_callee (Iop op args dst0 pc') H8) as [cf' [d [s [Hcf' Hcode]]]].
+      simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
+      eapply exec_Iop; [exact Hcode |].
+      unfold map_regs in *. rewrite map_map.
+      replace (map (fun x => rs_tgt (x + reg_offset)) args) with (map rs_callee_src args).
+      * exact H9.
+      * apply map_ext_in. intros a _. exact (H1 a).
+    + eapply match_inlined; eauto.
+      intros r. unfold update.
+      destruct (Nat.eqb (r + reg_offset) (dst0 + reg_offset)) eqn:Heq.
+      * apply Nat.eqb_eq in Heq. assert (r = dst0) by lia. subst.
+        rewrite Nat.eqb_refl. reflexivity.
+      * apply Nat.eqb_neq in Heq. assert (r <> dst0) by lia.
+        rewrite <- H1.
+        destruct (Nat.eqb r dst0) eqn:Heq2; [apply Nat.eqb_eq in Heq2; lia | reflexivity].
+
+  - (* exec_Icond_true inside inlined body *)
+    exists (State s_tgt caller_tgt (ifso + node_offset) rs_tgt).
+    split.
+    + apply plus_one.
+      destruct (inlined_body_at pc_callee (Icond cond ifso ifnot) H8) as [cf' [d [s [Hcf' Hcode]]]].
+      simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
+      eapply exec_Icond_true; [exact Hcode |].
+      rewrite <- H1. exact H9.
+    + eapply match_inlined; eauto.
+
+  - (* exec_Icond_false inside inlined body *)
+    exists (State s_tgt caller_tgt (ifnot + node_offset) rs_tgt).
+    split.
+    + apply plus_one.
+      destruct (inlined_body_at pc_callee (Icond cond ifso ifnot) H8) as [cf' [d [s [Hcf' Hcode]]]].
+      simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
+      eapply exec_Icond_false; [exact Hcode |].
+      rewrite <- H1. exact H9.
+    + eapply match_inlined; eauto.
+
+  - (* exec_Icall inside inlined body: impossible *)
+    exfalso.
+    assert (Hleafb : isLeafb callee = true).
+    { pose proof Hinline as Hinl.
+      unfold inline in Hinl.
+      unfold callee.
+      destruct (nth_error p (cs_target cs)); [| discriminate].
+      destruct (isLeafb f) eqn:Ef; [reflexivity | discriminate]. }
+    assert (Hleaf' : isLeaf callee).
+    { unfold isLeaf, isLeafb in *.
+      rewrite forallb_forall in Hleafb.
+      apply Forall_forall. intros x Hx.
+      specialize (Hleafb x Hx). destruct x; try exact I. discriminate. }
+    unfold isLeaf in Hleaf'.
+    rewrite Forall_forall in Hleaf'.
+    specialize (Hleaf' _ (nth_error_In _ _ H8)). simpl in Hleaf'. exact Hleaf'.
+
   - (* exec_Iret inside inlined body *) admit.
 
   (* === match_callstate === *)
