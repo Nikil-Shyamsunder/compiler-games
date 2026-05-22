@@ -331,6 +331,43 @@ Proof.
   unfold no. reflexivity.
 Qed.
 
+(* Instruction at position (length (fn_code caller) + i) in modified caller
+   is the i-th param bind instruction *)
+Lemma param_bind_at : forall f_tgt i instr,
+  nth_error p' (cs_caller cs) = Some f_tgt ->
+  nth_error (bind_params call_args (fn_params callee) reg_offset
+               (length (fn_code caller))) i = Some instr ->
+  nth_error (fn_code f_tgt) (length (fn_code caller) + i) = Some instr.
+Proof.
+  intros f_tgt i instr Hf_tgt Hbind. unpack_inline.
+  unfold inline_in_func in Hinl_func.
+  rewrite Hcall_instr in Hinl_func.
+  injection Hinl_func as Hcf'.
+  replace f_tgt with caller_f'.
+  2: { assert (nth_error p' (cs_caller cs) = Some caller_f').
+       { rewrite Hp'. apply nth_error_replace_same. nth_error_some_lt. }
+       congruence. }
+  rewrite <- Hcf'. simpl. unfold inline_call_site.
+  assert (Hcs_bound : cs_pc cs < length (fn_code the_caller))
+    by (apply nth_error_Some; congruence).
+  set (pc := firstn (cs_pc cs) (fn_code the_caller)
+             ++ Inop (length (fn_code the_caller))
+             :: skipn (cs_pc cs + 1) (fn_code the_caller)).
+  assert (Hpc_len : length pc = length (fn_code the_caller)).
+  { unfold pc. rewrite length_app. simpl. rewrite length_skipn, length_firstn. lia. }
+  rewrite nth_error_app2.
+  2: { rewrite Hpc_len. apply Nat.le_add_r. }
+  rewrite Hpc_len.
+  replace (length (fn_code caller) + i - length (fn_code the_caller))
+    with i by (rewrite Hcaller_eq; lia).
+  assert (Hro : reg_offset = max_reg_func the_caller + 1)
+    by (unfold reg_offset; rewrite Hcaller_eq; reflexivity).
+  rewrite Hcaller_eq, Hcallee_eq, Hcall_args_eq, Hro in Hbind.
+  rewrite nth_error_app1.
+  - exact Hbind.
+  - apply nth_error_Some. congruence.
+Qed.
+
 (* The instruction at cs_pc in the modified caller is Inop jumping to param binds *)
 Lemma cs_pc_in_p' : forall f_tgt,
   nth_error p' (cs_caller cs) = Some f_tgt ->
@@ -529,6 +566,26 @@ Proof.
       (* step through the no-op and the call arg movements *)
       ++ eapply plus_step. apply exec_Inop. exact HInop.
       (* TODO: plus steps until all args are in the state at the offset *)
+      Check param_bind_at.
+
+      (* TODO: move to lemma *)
+      assert (Hbind_spec : forall i a param,
+        nth_error call_args i = Some a ->
+        nth_error (fn_params callee) i = Some param ->
+        nth_error (bind_params call_args (fn_params callee) reg_offset (length (fn_code
+      caller))) i =
+          Some (Iop Oid [a] (param + reg_offset) (length (fn_code caller) + i + 1))).
+      {
+        intros i a param Ha Hparam.
+        induction i. generalize dependent call_args. generalize dependent (fn_params callee). 
+        intros. simpl.
+        destruct (bind_params call_args0 l reg_offset (length (fn_code caller))) as [|x] eqn:hfduf. 
+        - admit.
+
+        admit.
+      }
+      
+      (* specialize (param_bind_at f_tgt 0 _ H3) as H4444. *)
       admit.
 
       (* match states *)

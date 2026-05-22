@@ -39,6 +39,8 @@ Definition remap_nodes (offset : nat) (i : instruction) : instruction :=
 (* Build parameter-binding moves: Iop Oid [arg_i] (param_i + reg_offset) next_node *)
 Fixpoint bind_params (args : list reg) (params : list reg) (reg_offset : nat)
     (start_node : nat) : list instruction :=
+  (* TODO: if they aren't the same length, some registers will fail to get initialized. This
+  will cause silent errors. as of now. *)
   match args, params with
   | a :: args_rest, p :: params_rest =>
       Iop Oid [a] (p + reg_offset) (start_node + 1) ::
