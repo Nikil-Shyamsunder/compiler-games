@@ -217,6 +217,66 @@ Proof.
   injection Hcall. intros. subst. eapply Hnot_call. reflexivity.
 Qed.
 
+
+Lemma inline_preserves_entrypoint : forall fi f_src f_tgt,
+  nth_error p fi = Some f_src ->
+  nth_error p' fi = Some f_tgt ->
+  fn_entrypoint f_src = fn_entrypoint f_tgt.
+Proof.
+  intros fi f_src f_tgt hFsrc hFtgt.
+  destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq | Hneq].
+  - (* fi = cs_caller cs: f_tgt is the modified caller *)
+    subst fi. unpack_inline.
+    replace f_src with caller_f by congruence.
+    unfold inline_in_func in Hinl_func.
+
+    destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [instr|] eqn:hInstr; try discriminate.
+    destruct (instr); try discriminate.
+    injection Hinl_func as Hinl_func.
+    replace f_tgt with caller_f'.
+    + rewrite <- Hinl_func. reflexivity.
+    + assert (nth_error p' (cs_caller cs) = Some caller_f'). rewrite Hp'. 
+      apply nth_error_replace_same, nth_error_Some. congruence. rewrite hFtgt in H. 
+      congruence.
+
+  - (* fi <> cs_caller cs: function unchanged *)
+    replace f_tgt with f_src by
+      (assert (nth_error p' fi = Some f_src) by
+        (apply other_func_preserved; auto; apply nth_error_Some; congruence);
+        congruence).
+    reflexivity. 
+Qed.
+
+
+Lemma inline_preserves_params : forall fi f_src f_tgt,
+  nth_error p fi = Some f_src ->
+  nth_error p' fi = Some f_tgt ->
+  fn_params f_src = fn_params f_tgt.
+Proof.
+    intros fi f_src f_tgt hFsrc hFtgt.
+  destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq | Hneq].
+  - (* fi = cs_caller cs: f_tgt is the modified caller *)
+    subst fi. unpack_inline.
+    replace f_src with caller_f by congruence.
+    unfold inline_in_func in Hinl_func.
+
+    destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [instr|] eqn:hInstr; try discriminate.
+    destruct (instr); try discriminate.
+    injection Hinl_func as Hinl_func.
+    replace f_tgt with caller_f'.
+    + rewrite <- Hinl_func. reflexivity.
+    + assert (nth_error p' (cs_caller cs) = Some caller_f'). rewrite Hp'. 
+      apply nth_error_replace_same, nth_error_Some. congruence. rewrite hFtgt in H. 
+      congruence.
+
+  - (* fi <> cs_caller cs: function unchanged *)
+    replace f_tgt with f_src by
+      (assert (nth_error p' fi = Some f_src) by
+        (apply other_func_preserved; auto; apply nth_error_Some; congruence);
+        congruence).
+    reflexivity. 
+Qed.
+
 Ltac solve_code_preserved :=
   eapply code_at_pc_preserved; eauto;
   eapply pc_ne_cs_pc; eauto; intros; discriminate.
@@ -315,6 +375,8 @@ Proof.
     contradiction. 
     apply regs_agree_update, H1, Hcaller.
 
+    (* FIXME: duplicate code. we can probably use `e`- tactics to remove specific names and 
+    generalize it? *)
   - (* exec_Icond_true, caller *) 
     exists (State s_tgt f_tgt ifso rs_tgt). split.
     apply plus_one. apply (exec_Icond_true _ _ _ _ _ cond _ ifnot).
@@ -383,19 +445,30 @@ Proof.
   apply H1. assumption. apply (max_reg_func_bound _ (Iret src) pc).
   unfold caller. rewrite <- Hcaller. rewrite H2. exact H9. 
 
-  (* === match_callstate === *)
-  - (* exec_function_entry *) admit.
-
-  (* === match_returnstate === *)
-  - (* exec_return *) admit.
-
-  (* === match_inlined cases === *)
+    (* === match_inlined cases === *)
   - (* exec_Inop inside inlined body *) admit.
   - (* exec_Iop inside inlined body *) admit.
   - (* exec_Icond_true inside inlined body *) admit.
   - (* exec_Icond_false inside inlined body *) admit.
   - (* exec_Icall inside inlined body: impossible *) exfalso. admit.
   - (* exec_Iret inside inlined body *) admit.
+
+  (* === match_callstate === *)
+  - (* exec_function_entry *) 
+  
+  exists (State s_tgt f_tgt (fn_entrypoint f_tgt) (init_regs args (fn_params f_tgt))). split.
+    + 
+      apply plus_one. apply exec_function_entry.
+    + Check match_normal. 
+    Check fn_entrypoint.
+    apply match_normal.
+    
+  admit.
+
+  (* === match_returnstate === *)
+  - (* exec_return *) admit.
+
+
 Admitted.
 
 End INLINING_PROOF.
