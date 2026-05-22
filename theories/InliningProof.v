@@ -515,10 +515,24 @@ Proof.
     destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother];
       [destruct (Nat.eq_dec pc (cs_pc cs)) as [Hinl | Hnotinl] |].
     + (* inlined call site: fi = cs_caller, pc = cs_pc *)
+
+      (* FIXME: this specialize rewrite situation is very ugly. *)
       specialize (H1 Hcaller) as Hregsagree. clear H0 H1.
-      
+      rewrite Hcaller in *. clear fi Hcaller.
+      specialize (cs_pc_in_p' f_tgt H3) as HInop.
+      destruct (cs_pc_call_target f_src H2) as [args' [dst' [succ' Hcall]]].
+      rewrite Hinl in H9. rewrite H9 in Hcall; injection Hcall. intros. 
+      rewrite H0 in *. rewrite H1 in *. rewrite H4 in *. rewrite H5 in *. rewrite Hinl in *.
+      clear H0 H1 H4 H5 Hcall pc Hinl. 
+
+      eexists. split.
+      (* step through the no-op and the call arg movements *)
+      ++ eapply plus_step. apply exec_Inop. exact HInop.
+      (* TODO: plus steps until all args are in the state at the offset *)
       admit.
 
+      (* match states *)
+      ++ admit.
 
 
       (* TODO: following two cases are esentially the same, we ought to merge them into
