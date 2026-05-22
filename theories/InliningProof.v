@@ -217,65 +217,47 @@ Proof.
   injection Hcall. intros. subst. eapply Hnot_call. reflexivity.
 Qed.
 
+(* common tacttic for both entrypoint and params
+preservation (handles any field). TODO:
+is there a cleaner way to do this? *)
+Ltac solve_inline_preserves_field :=
+  intros fi f_src f_tgt hFsrc hFtgt;
+  destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq | Hneq];
+  [ subst fi; unpack_inline;
+    match goal with
+    | [ Hcl : nth_error p (cs_caller cs) = Some ?cf,
+        Hinl : inline_in_func ?cf _ _ = Some ?cf' |- _ ] =>
+        replace f_src with cf by congruence;
+        unfold inline_in_func in Hinl;
+        destruct (nth_error (fn_code cf) (cs_pc cs)) as [instr|] eqn:hInstr; try discriminate;
+        destruct instr; try discriminate;
+        injection Hinl as Hinl;
+        replace f_tgt with cf';
+        [ rewrite <- Hinl; reflexivity
+        | match goal with
+          | [ Hp : p' = firstn _ _ ++ ?cf' :: _ |- _ ] =>
+              assert (nth_error p' (cs_caller cs) = Some cf') by
+                (rewrite Hp; apply nth_error_replace_same, nth_error_Some; congruence);
+              congruence
+          end ]
+    end
+  | replace f_tgt with f_src by
+      (assert (nth_error p' fi = Some f_src) by
+        (apply other_func_preserved; auto; apply nth_error_Some; congruence);
+        congruence);
+    reflexivity ].
 
 Lemma inline_preserves_entrypoint : forall fi f_src f_tgt,
   nth_error p fi = Some f_src ->
   nth_error p' fi = Some f_tgt ->
   fn_entrypoint f_src = fn_entrypoint f_tgt.
-Proof.
-  intros fi f_src f_tgt hFsrc hFtgt.
-  destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq | Hneq].
-  - (* fi = cs_caller cs: f_tgt is the modified caller *)
-    subst fi. unpack_inline.
-    replace f_src with caller_f by congruence.
-    unfold inline_in_func in Hinl_func.
-
-    destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [instr|] eqn:hInstr; try discriminate.
-    destruct (instr); try discriminate.
-    injection Hinl_func as Hinl_func.
-    replace f_tgt with caller_f'.
-    + rewrite <- Hinl_func. reflexivity.
-    + assert (nth_error p' (cs_caller cs) = Some caller_f'). rewrite Hp'. 
-      apply nth_error_replace_same, nth_error_Some. congruence. rewrite hFtgt in H. 
-      congruence.
-
-  - (* fi <> cs_caller cs: function unchanged *)
-    replace f_tgt with f_src by
-      (assert (nth_error p' fi = Some f_src) by
-        (apply other_func_preserved; auto; apply nth_error_Some; congruence);
-        congruence).
-    reflexivity. 
-Qed.
-
+Proof. solve_inline_preserves_field. Qed.
 
 Lemma inline_preserves_params : forall fi f_src f_tgt,
   nth_error p fi = Some f_src ->
   nth_error p' fi = Some f_tgt ->
   fn_params f_src = fn_params f_tgt.
-Proof.
-    intros fi f_src f_tgt hFsrc hFtgt.
-  destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq | Hneq].
-  - (* fi = cs_caller cs: f_tgt is the modified caller *)
-    subst fi. unpack_inline.
-    replace f_src with caller_f by congruence.
-    unfold inline_in_func in Hinl_func.
-
-    destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [instr|] eqn:hInstr; try discriminate.
-    destruct (instr); try discriminate.
-    injection Hinl_func as Hinl_func.
-    replace f_tgt with caller_f'.
-    + rewrite <- Hinl_func. reflexivity.
-    + assert (nth_error p' (cs_caller cs) = Some caller_f'). rewrite Hp'. 
-      apply nth_error_replace_same, nth_error_Some. congruence. rewrite hFtgt in H. 
-      congruence.
-
-  - (* fi <> cs_caller cs: function unchanged *)
-    replace f_tgt with f_src by
-      (assert (nth_error p' fi = Some f_src) by
-        (apply other_func_preserved; auto; apply nth_error_Some; congruence);
-        congruence).
-    reflexivity. 
-Qed.
+Proof. solve_inline_preserves_field. Qed.
 
 Ltac solve_code_preserved :=
   eapply code_at_pc_preserved; eauto;
