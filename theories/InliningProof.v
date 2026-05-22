@@ -331,6 +331,56 @@ Proof.
   unfold no. reflexivity.
 Qed.
 
+(* The instruction at cs_pc in the modified caller is Inop jumping to param binds *)
+Lemma cs_pc_in_p' : forall f_tgt,
+  nth_error p' (cs_caller cs) = Some f_tgt ->
+  nth_error (fn_code f_tgt) (cs_pc cs) = Some (Inop (length (fn_code caller))).
+Proof.
+  intros f_tgt Hf_tgt. unpack_inline.
+  unfold inline_in_func in Hinl_func.
+  rewrite Hcall_instr in Hinl_func.
+  injection Hinl_func as Hcf'.
+  replace f_tgt with caller_f'.
+  2: { assert (nth_error p' (cs_caller cs) = Some caller_f').
+       { rewrite Hp'. apply nth_error_replace_same. nth_error_some_lt. }
+       congruence. }
+  rewrite <- Hcf'. simpl. unfold inline_call_site.
+  assert (Hcs_bound : cs_pc cs < length (fn_code the_caller))
+    by (apply nth_error_Some; congruence).
+  rewrite nth_error_app1.
+  2: { rewrite length_app. simpl. rewrite length_skipn, length_firstn. lia. }
+  apply nth_error_replace_same. lia.
+Qed.
+
+(* The call at cs_pc has target = call_target *)
+Lemma cs_pc_call_target : forall f_src,
+  nth_error p (cs_caller cs) = Some f_src ->
+  exists args dst succ,
+    nth_error (fn_code f_src) (cs_pc cs) = Some (Icall call_target args dst succ).
+Proof.
+  intros f_src Hf. unpack_inline.
+  unfold inline_in_func in Hinl_func.
+  replace f_src with the_caller by congruence.
+  rewrite Hcall_instr.
+  assert (Hct : call_target = call_tgt).
+  { change call_target with (match nth_error (fn_code caller) (cs_pc cs) with
+      | Some (Icall t _ _ _) => t | _ => 0 end).
+    rewrite Hcaller_eq, Hcall_instr. reflexivity. }
+  rewrite Hct. eauto.
+Qed.
+
+(* The target of the inlined call is callee *)
+Lemma call_target_is_callee :
+  nth_error p call_target = Some callee.
+Proof.
+  unpack_inline.
+  assert (Hct : call_target = call_tgt).
+  { change call_target with (match nth_error (fn_code caller) (cs_pc cs) with
+      | Some (Icall t _ _ _) => t | _ => 0 end).
+    rewrite Hcaller_eq, Hcall_instr. reflexivity. }
+  rewrite Hct, Hcallee_eq. exact Htarget.
+Qed.
+
 Ltac solve_code_preserved :=
   eapply code_at_pc_preserved; eauto;
   eapply pc_ne_cs_pc; eauto; intros; discriminate.
@@ -466,6 +516,7 @@ Proof.
       [destruct (Nat.eq_dec pc (cs_pc cs)) as [Hinl | Hnotinl] |].
     + (* inlined call site: fi = cs_caller, pc = cs_pc *)
       specialize (H1 Hcaller) as Hregsagree. clear H0 H1.
+      
       admit.
 
 
