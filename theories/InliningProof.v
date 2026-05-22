@@ -59,14 +59,15 @@ Inductive match_states : state -> state -> Prop :=
                    (State s_tgt f_tgt pc rs_tgt)
   | match_inlined : forall s_src s_tgt
       (dst : reg) (ret_pc : node) (rs_caller_src rs_caller_tgt : regset)
-      (pc_callee : node) (rs_callee_src rs_tgt : regset),
+      (pc_callee : node) (rs_callee_src rs_tgt : regset) caller_tgt,
       match_stacks s_src s_tgt ->
       regs_agree rs_caller_src rs_caller_tgt ->
       (forall r, rs_callee_src r = rs_tgt (r + reg_offset)) ->
+      nth_error p' (cs_caller cs) = Some caller_tgt ->
       match_states
         (State ((Stackframe dst caller ret_pc rs_caller_src) :: s_src)
                callee pc_callee rs_callee_src)
-        (State s_tgt caller (pc_callee + node_offset) rs_tgt)
+        (State s_tgt caller_tgt (pc_callee + node_offset) rs_tgt)
   | match_callstate : forall s_src s_tgt fi f_src f_tgt args,
       match_stacks s_src s_tgt ->
       nth_error p fi = Some f_src ->
@@ -259,6 +260,60 @@ Lemma inline_preserves_params : forall fi f_src f_tgt,
   fn_params f_src = fn_params f_tgt.
 Proof. solve_inline_preserves_field. Qed.
 
+(* TODO: this proof is so ugly. *)
+Lemma inlined_body_at : forall pc_callee instr,
+  nth_error (fn_code callee) pc_callee = Some instr ->
+  exists caller_f' dst succ,
+    nth_error p' (cs_caller cs) = Some caller_f' /\
+    nth_error (fn_code caller_f') (pc_callee + node_offset) =
+      Some (replace_ret (remap_nodes node_offset (remap_regs reg_offset instr))
+                        reg_offset dst succ).
+Proof.
+  intros pc_callee instr Hinstr.
+  unpack_inline.
+  unfold inline_in_func in Hinl_func.
+  destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [ci|] eqn:Hci;
+    try discriminate.
+  destruct ci as [| | | ? cargs cdst csucc | ]; try discriminate.
+  injection Hinl_func as Hcf'.
+  assert (Hcaller_f' : nth_error p' (cs_caller cs) = Some caller_f').
+  { rewrite Hp'. apply nth_error_replace_same. nth_error_some_lt. }
+  exists caller_f', cdst, csucc. split; [exact Hcaller_f' |].
+  rewrite <- Hcf'. simpl.
+  unfold inline_call_site.
+  set (ro := max_reg_func caller_f + 1).
+  set (no := length (fn_code caller_f)).
+  set (pb := bind_params cargs (fn_params callee_f) ro no).
+  set (cb := transform_callee_body (fn_code callee_f) ro (no + length pb) cdst csucc).
+  set (pc := firstn (cs_pc cs) (fn_code caller_f)
+             ++ Inop no :: skipn (cs_pc cs + 1) (fn_code caller_f)).
+  assert (Hcs_bound : cs_pc cs < length (fn_code caller_f))
+    by (apply nth_error_Some; congruence).
+  assert (Hpc_len : length pc = length (fn_code caller_f)).
+  { unfold pc. rewrite length_app. simpl. rewrite length_skipn, length_firstn. lia. }
+  change (fn_code callee) with (fn_code callee_f) in Hinstr.
+  change reg_offset with ro.
+  assert (Hca : call_args = cargs).
+  { unfold call_args. change (fn_code caller) with (fn_code caller_f).
+    rewrite Hci. reflexivity. }
+  assert (Hno : node_offset = no + length pb).
+  { unfold node_offset.
+    change (fn_code caller) with (fn_code caller_f).
+    change (fn_params callee) with (fn_params callee_f).
+    rewrite Hca. reflexivity. }
+  rewrite Hno.
+  rewrite app_assoc.
+  rewrite nth_error_app2.
+  2: { rewrite length_app, Hpc_len. unfold no. lia. }
+  rewrite length_app, Hpc_len.
+  replace (pc_callee + (no + length pb) - (length (fn_code caller_f) + length pb))
+    with pc_callee by (unfold no; lia).
+  unfold cb, transform_callee_body.
+  rewrite nth_error_map.
+  rewrite Hinstr. simpl.
+  unfold no. reflexivity.
+Qed.
+
 Ltac solve_code_preserved :=
   eapply code_at_pc_preserved; eauto;
   eapply pc_ne_cs_pc; eauto; intros; discriminate.
@@ -428,7 +483,15 @@ Proof.
   unfold caller. rewrite <- Hcaller. rewrite H2. exact H9. 
 
     (* === match_inlined cases === *)
-  - (* exec_Inop inside inlined body *) admit.
+  - (* exec_Inop inside inlined body *)
+    exists (State s_tgt caller_tgt (pc' + node_offset) rs_tgt).
+    split.
+    + apply plus_one. constructor.
+      destruct (inlined_body_at pc_callee (Inop pc') H8) as [cf' [d [s [Hcf' Hcode]]]].
+      simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
+      exact Hcode.
+    + eapply match_inlined; eauto.
+    
   - (* exec_Iop inside inlined body *) admit.
   - (* exec_Icond_true inside inlined body *) admit.
   - (* exec_Icond_false inside inlined body *) admit.
