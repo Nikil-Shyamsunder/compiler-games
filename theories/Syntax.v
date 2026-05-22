@@ -48,7 +48,6 @@ Definition program := list function.
 Record callsite := mk_callsite {
   cs_caller : nat;
   cs_pc : node;
-  cs_target : nat;
 }.
 
 Definition isLeaf (f : function) : Prop :=

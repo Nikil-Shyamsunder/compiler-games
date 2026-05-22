@@ -98,21 +98,26 @@ Definition isLeafb (f : function) : bool :=
 
 (* Top-level: inline a specific call site.
    Returns None if the callsite is invalid or the target isn't a leaf. *)
+(* TODO: need a rust-like ? operator that makes this def a lot prettier. *)
 Definition inline (p : program) (cs : callsite) : option program :=
-  match nth_error p (cs_target cs) with
+  match nth_error p (cs_caller cs) with
   | None => None
-  | Some callee =>
-      if isLeafb callee then
-        match nth_error p (cs_caller cs) with
-        | None => None
-        | Some caller =>
-            match inline_in_func caller callee (cs_pc cs) with
-            | None => None
-            | Some caller' =>
-                Some (firstn (cs_caller cs) p ++ [caller'] ++ skipn (cs_caller cs + 1) p)
-            end
-        end
-      else None
+  | Some caller =>
+      match nth_error (fn_code caller) (cs_pc cs) with
+      | Some (Icall target _ _ _) =>
+          match nth_error p target with
+          | None => None
+          | Some callee =>
+              if isLeafb callee then
+                match inline_in_func caller callee (cs_pc cs) with
+                | None => None
+                | Some caller' =>
+                    Some (firstn (cs_caller cs) p ++ [caller'] ++ skipn (cs_caller cs + 1) p)
+                end
+              else None
+          end
+      | _ => None
+      end
   end.
 
  

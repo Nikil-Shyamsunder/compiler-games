@@ -9,13 +9,26 @@ Variable cs : callsite.
 Variable p' : program.
 Hypothesis Hinline : inline p cs = Some p'.
 
-Let callee := match nth_error p (cs_target cs) with
+Let caller := match nth_error p (cs_caller cs) with
               | Some f => f
               | None => mk_function [] [] 0
               end.
 
-Let caller := match nth_error p (cs_caller cs) with
-              | Some f => f
+Let call_target := match nth_error (fn_code caller) (cs_pc cs) with
+                   | Some (Icall t _ _ _) => t
+                   | _ => 0
+                   end.
+
+Let callee := match nth_error p (cs_caller cs) with
+              | Some caller_f =>
+                  match nth_error (fn_code caller_f) (cs_pc cs) with
+                  | Some (Icall t _ _ _) =>
+                      match nth_error p t with
+                      | Some f => f
+                      | None => mk_function [] [] 0
+                      end
+                  | _ => mk_function [] [] 0
+                  end
               | None => mk_function [] [] 0
               end.
 
@@ -87,13 +100,21 @@ Ltac unpack_inline :=
   let H := fresh "Hinl" in
   pose proof Hinline as H;
   unfold inline in H;
-  destruct (nth_error p (cs_target cs)) as [callee_f|] eqn:Htarget; [|discriminate];
+  destruct (nth_error p (cs_caller cs)) as [the_caller|] eqn:Hcaller_lookup; [|discriminate];
+  destruct (nth_error (fn_code the_caller) (cs_pc cs)) as [[ | | | ?call_tgt ?call_al ?call_d ?call_s | ]|] eqn:Hcall_instr; try discriminate;
+  destruct (nth_error p call_tgt) as [callee_f|] eqn:Htarget; [|discriminate];
   destruct (isLeafb callee_f) eqn:Hleaf; [|discriminate];
-  destruct (nth_error p (cs_caller cs)) as [caller_f|] eqn:Hcaller_lookup; [|discriminate];
-  destruct (inline_in_func caller_f callee_f (cs_pc cs)) as [caller_f'|] eqn:Hinl_func; [|discriminate];
+  destruct (inline_in_func the_caller callee_f (cs_pc cs)) as [caller_f'|] eqn:Hinl_func; [|discriminate];
   assert (Hp' : p' = firstn (cs_caller cs) p ++ caller_f' :: skipn (cs_caller cs + 1) p)
     by (change (caller_f' :: skipn (cs_caller cs + 1) p)
           with ([caller_f'] ++ skipn (cs_caller cs + 1) p); congruence);
+  assert (Hcaller_eq : caller = the_caller) by reflexivity;
+  assert (Hcallee_eq : callee = callee_f) by reflexivity;
+  assert (Hcall_args_eq : call_args = call_al)
+    by (change call_args with
+          (match nth_error (fn_code caller) (cs_pc cs) with
+           | Some (Icall _ args _ _) => args | _ => [] end);
+        rewrite Hcaller_eq, Hcall_instr; reflexivity);
   clear H.
 
 Ltac nth_error_some_lt :=
@@ -104,6 +125,11 @@ Ltac nth_error_some_lt :=
       apply nth_error_Some; congruence
   end.
 
+
+Lemma callee_is_leaf : isLeafb callee = true.
+Proof.
+  unpack_inline. rewrite Hcallee_eq. exact Hleaf.
+Qed.
 
 (** * Preservation lemmas *)
 
@@ -136,22 +162,22 @@ Lemma other_pc_preserved : forall pc i,
 Proof.
   intros pc i Hpc Hi. unpack_inline.
   unfold inline_in_func in Hinl_func.
-  change (fn_code caller) with (fn_code caller_f) in Hi.
-  destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [[]|] eqn:Hcall;
+  rewrite Hcaller_eq in Hi.
+  destruct (nth_error (fn_code the_caller) (cs_pc cs)) as [[]|] eqn:Hcall;
     try discriminate.
   injection Hinl_func as Hcf'.
   rewrite Hp'. eexists. split.
   - apply nth_error_replace_same. apply nth_error_Some. congruence.
   - rewrite <- Hcf'. simpl. unfold inline_call_site.
-    assert (Hpc_bound : pc < length (fn_code caller_f))
+    assert (Hpc_bound : pc < length (fn_code the_caller))
       by (apply nth_error_Some; congruence).
-    assert (Hcs_bound : cs_pc cs < length (fn_code caller_f))
+    assert (Hcs_bound : cs_pc cs < length (fn_code the_caller))
       by (apply nth_error_Some; congruence).
     assert (Hpatch_len :
-      length (firstn (cs_pc cs) (fn_code caller_f) ++
-              Inop (length (fn_code caller_f)) ::
-              skipn (cs_pc cs + 1) (fn_code caller_f)) =
-      length (fn_code caller_f)).
+      length (firstn (cs_pc cs) (fn_code the_caller) ++
+              Inop (length (fn_code the_caller)) ::
+              skipn (cs_pc cs + 1) (fn_code the_caller)) =
+      length (fn_code the_caller)).
     { rewrite length_app. simpl. rewrite length_skipn, length_firstn. lia. }
     rewrite nth_error_app1 by lia.
     rewrite nth_error_replace_other; auto.
@@ -197,8 +223,8 @@ Lemma cs_pc_is_call : forall f_src,
 Proof.
   intros f_src Hf. unpack_inline.
   unfold inline_in_func in Hinl_func.
-  replace f_src with caller_f by congruence.
-  destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [[]|] eqn:E;
+  replace f_src with the_caller by congruence.
+  destruct (nth_error (fn_code the_caller) (cs_pc cs)) as [[]|] eqn:E;
     try discriminate.
   eauto.
 Qed.
@@ -260,7 +286,6 @@ Lemma inline_preserves_params : forall fi f_src f_tgt,
   fn_params f_src = fn_params f_tgt.
 Proof. solve_inline_preserves_field. Qed.
 
-(* TODO: this proof is so ugly. *)
 Lemma inlined_body_at : forall pc_callee instr,
   nth_error (fn_code callee) pc_callee = Some instr ->
   exists caller_f' dst succ,
@@ -272,41 +297,33 @@ Proof.
   intros pc_callee instr Hinstr.
   unpack_inline.
   unfold inline_in_func in Hinl_func.
-  destruct (nth_error (fn_code caller_f) (cs_pc cs)) as [ci|] eqn:Hci;
-    try discriminate.
-  destruct ci as [| | | ? cargs cdst csucc | ]; try discriminate.
+  rewrite Hcall_instr in Hinl_func.
   injection Hinl_func as Hcf'.
   assert (Hcaller_f' : nth_error p' (cs_caller cs) = Some caller_f').
   { rewrite Hp'. apply nth_error_replace_same. nth_error_some_lt. }
-  exists caller_f', cdst, csucc. split; [exact Hcaller_f' |].
+  exists caller_f', call_d, call_s. split; [exact Hcaller_f' |].
   rewrite <- Hcf'. simpl.
   unfold inline_call_site.
-  set (ro := max_reg_func caller_f + 1).
-  set (no := length (fn_code caller_f)).
-  set (pb := bind_params cargs (fn_params callee_f) ro no).
-  set (cb := transform_callee_body (fn_code callee_f) ro (no + length pb) cdst csucc).
-  set (pc := firstn (cs_pc cs) (fn_code caller_f)
-             ++ Inop no :: skipn (cs_pc cs + 1) (fn_code caller_f)).
-  assert (Hcs_bound : cs_pc cs < length (fn_code caller_f))
+  set (ro := max_reg_func the_caller + 1).
+  set (no := length (fn_code the_caller)).
+  set (pb := bind_params call_al (fn_params callee_f) ro no).
+  set (cb := transform_callee_body (fn_code callee_f) ro (no + length pb) call_d call_s).
+  set (pc := firstn (cs_pc cs) (fn_code the_caller)
+             ++ Inop no :: skipn (cs_pc cs + 1) (fn_code the_caller)).
+  assert (Hcs_bound : cs_pc cs < length (fn_code the_caller))
     by (apply nth_error_Some; congruence).
-  assert (Hpc_len : length pc = length (fn_code caller_f)).
+  assert (Hpc_len : length pc = length (fn_code the_caller)).
   { unfold pc. rewrite length_app. simpl. rewrite length_skipn, length_firstn. lia. }
-  change (fn_code callee) with (fn_code callee_f) in Hinstr.
-  change reg_offset with ro.
-  assert (Hca : call_args = cargs).
-  { unfold call_args. change (fn_code caller) with (fn_code caller_f).
-    rewrite Hci. reflexivity. }
-  assert (Hno : node_offset = no + length pb).
-  { unfold node_offset.
-    change (fn_code caller) with (fn_code caller_f).
-    change (fn_params callee) with (fn_params callee_f).
-    rewrite Hca. reflexivity. }
-  rewrite Hno.
+  rewrite Hcallee_eq in Hinstr.
+  assert (Hro_eq : reg_offset = ro) by (unfold reg_offset; rewrite Hcaller_eq; reflexivity).
+  assert (Hno_eq : node_offset = no + length pb).
+  { unfold node_offset. rewrite Hcaller_eq, Hcallee_eq, Hcall_args_eq. reflexivity. }
+  rewrite Hro_eq, Hno_eq.
   rewrite app_assoc.
   rewrite nth_error_app2.
   2: { rewrite length_app, Hpc_len. unfold no. lia. }
   rewrite length_app, Hpc_len.
-  replace (pc_callee + (no + length pb) - (length (fn_code caller_f) + length pb))
+  replace (pc_callee + (no + length pb) - (length (fn_code the_caller) + length pb))
     with pc_callee by (unfold no; lia).
   unfold cb, transform_callee_body.
   rewrite nth_error_map.
@@ -549,12 +566,7 @@ Proof.
 
   - (* exec_Icall inside inlined body: impossible *)
     exfalso.
-    assert (Hleafb : isLeafb callee = true).
-    { pose proof Hinline as Hinl.
-      unfold inline in Hinl.
-      unfold callee.
-      destruct (nth_error p (cs_target cs)); [| discriminate].
-      destruct (isLeafb f) eqn:Ef; [reflexivity | discriminate]. }
+    assert (Hleafb : isLeafb callee = true) by exact callee_is_leaf.
     assert (Hleaf' : isLeaf callee).
     { unfold isLeaf, isLeafb in *.
       rewrite forallb_forall in Hleafb.
