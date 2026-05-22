@@ -441,14 +441,16 @@ Proof.
   exists (State s_tgt f_tgt (fn_entrypoint f_tgt) (init_regs args (fn_params f_tgt))). split.
     + 
       apply plus_one. apply exec_function_entry.
-    + Check match_normal. 
-    Check fn_entrypoint.
-    apply match_normal.
-    
-  admit.
+    +
+    rewrite (inline_preserves_entrypoint fi f_src f_tgt H0 H1).
+    rewrite (inline_preserves_params fi f_src f_tgt H0 H1).
+
+    (* TODO: is there a cleaner way to write the tactic combinator here that conveys what dispatches each case? *)
+    apply (match_normal _ _ fi); try assumption; try unfold regs_agree; try reflexivity.
 
   (* === match_returnstate === *)
-  - (* exec_return *) admit.
+  - (* exec_return *) 
+  admit.
 
 
 Admitted.
