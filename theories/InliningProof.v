@@ -81,12 +81,6 @@ Inductive match_states : state -> state -> Prop :=
         (State ((Stackframe dst caller ret_pc rs_caller_src) :: s_src)
                callee pc_callee rs_callee_src)
         (State s_tgt caller_tgt (pc_callee + node_offset) rs_tgt)
-  | match_callstate : forall s_src s_tgt fi f_src f_tgt args,
-      match_stacks s_src s_tgt ->
-      nth_error p fi = Some f_src ->
-      nth_error p' fi = Some f_tgt ->
-      match_states (Callstate s_src f_src args)
-                   (Callstate s_tgt f_tgt args)
   | match_returnstate : forall s_src s_tgt v,
       match_stacks s_src s_tgt ->
       match_states (Returnstate s_src v)
@@ -564,32 +558,10 @@ Proof.
 
       eexists. split.
       (* step through the no-op and the call arg movements *)
-      ++ eapply plus_step. apply exec_Inop. exact HInop.
-      (* TODO: plus steps until all args are in the state at the offset *)
-      Check param_bind_at.
-
-      (* TODO: move to lemma *)
-      assert (Hbind_spec : forall i a param,
-        nth_error call_args i = Some a ->
-        nth_error (fn_params callee) i = Some param ->
-        nth_error (bind_params call_args (fn_params callee) reg_offset (length (fn_code
-      caller))) i =
-          Some (Iop Oid [a] (param + reg_offset) (length (fn_code caller) + i + 1))).
-      {
-        intros i a param Ha Hparam.
-        induction i. generalize dependent call_args. generalize dependent (fn_params callee). 
-        intros. simpl.
-        destruct (bind_params call_args0 l reg_offset (length (fn_code caller))) as [|x] eqn:hfduf. 
-        - admit.
-
-        admit.
-      }
-      
-      (* specialize (param_bind_at f_tgt 0 _ H3) as H4444. *)
-      admit.
+      * admit.
 
       (* match states *)
-      ++ admit.
+      * admit.
 
 
       (* TODO: following two cases are esentially the same, we ought to merge them into
@@ -604,12 +576,17 @@ Proof.
       assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
       { eapply (map_regs_agree _ _ f_src pc (Icall target args dst pc'));
         auto. rewrite <- Hcaller. assumption. intros. simpl. right. assumption. }
-      eexists. split;
-      [ apply plus_one; eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt]
-      | rewrite <- Hmap;
-        eapply (match_callstate _ _ target); eauto;
-        eapply match_stacks_cons; eauto;
-        apply H1; exact Hcaller ].
+      pose proof (inline_preserves_entrypoint target fd fd_tgt H10 Hfd_tgt) as Hentry.
+      pose proof (inline_preserves_params target fd fd_tgt H10 Hfd_tgt) as Hparams.
+      eexists. split.
+      * apply plus_one. eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt].
+      * rewrite Hentry, Hparams, <- Hmap.
+        eapply match_normal.
+        -- eapply match_stacks_cons; eauto.
+        -- intros _. reflexivity.
+        -- unfold regs_agree. intros. reflexivity.
+        -- exact H10.
+        -- exact Hfd_tgt.
     + (* different call site: fi <> cs_caller *)
       assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs) by auto.
       assert (rs_src = rs_tgt) by auto. subst rs_tgt.
@@ -618,11 +595,18 @@ Proof.
       assert (Htgt_in_p' : exists fd_tgt, nth_error p' target = Some fd_tgt)
         by (destruct (find_func_preserved _ _ H10) as [? | [_ ?]]; eauto).
       destruct Htgt_in_p' as [fd_tgt Hfd_tgt].
-      eexists. split;
-      [ apply plus_one; eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt]
-      | eapply (match_callstate _ _ target); eauto;
-        eapply match_stacks_cons; eauto;
-        unfold regs_agree; intros; reflexivity ].
+      pose proof (inline_preserves_entrypoint target fd fd_tgt H10 Hfd_tgt) as Hentry.
+      pose proof (inline_preserves_params target fd fd_tgt H10 Hfd_tgt) as Hparams.
+      eexists. split.
+      * apply plus_one. eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt].
+      * rewrite Hentry, Hparams.
+        eapply match_normal.
+        -- eapply match_stacks_cons; eauto.
+           unfold regs_agree; intros; reflexivity.
+        -- intros _. reflexivity.
+        -- unfold regs_agree. intros. reflexivity.
+        -- exact H10.
+        -- exact Hfd_tgt.
   
   - (* exec_Iret, caller *)
   exists (Returnstate s_tgt (rs_tgt src)). split.
@@ -699,19 +683,6 @@ Proof.
     specialize (Hleaf' _ (nth_error_In _ _ H8)). simpl in Hleaf'. exact Hleaf'.
 
   - (* exec_Iret inside inlined body *) admit.
-
-  (* === match_callstate === *)
-  - (* exec_function_entry *) 
-  
-  exists (State s_tgt f_tgt (fn_entrypoint f_tgt) (init_regs args (fn_params f_tgt))). split.
-    + 
-      apply plus_one. apply exec_function_entry.
-    +
-    rewrite (inline_preserves_entrypoint fi f_src f_tgt H0 H1).
-    rewrite (inline_preserves_params fi f_src f_tgt H0 H1).
-
-    (* TODO: is there a cleaner way to write the tactic combinator here that conveys what dispatches each case? *)
-    apply (match_normal _ _ fi); try assumption; try unfold regs_agree; try reflexivity.
 
   (* === match_returnstate === *)
   - (* exec_return *) 

@@ -25,8 +25,6 @@ Inductive stackframe : Type :=
 Inductive state : Type :=
   (* State when executing within a function `f` at `pc` with register state `rs` *)
   | State (stack : list stackframe) (f : function) (pc : node) (rs : regset)
-  (* State when about to start executing a new function `f` with args `args` *)
-  | Callstate (stack : list stackframe) (f : function) (args : list nat)
   (* State when a function is returning with some value `v` *)
   | Returnstate (stack : list stackframe) (v : nat).
 
@@ -54,15 +52,13 @@ Inductive step (p : program) : state -> state -> Prop :=
       nth_error (fn_code f) pc = Some (Icall target args dst pc') ->
       nth_error p target = Some fd ->
       step p (State s f pc rs)
-             (Callstate (Stackframe dst f pc' rs :: s) fd (map_regs rs args))
+             (State (Stackframe dst f pc' rs :: s) fd
+                    (fn_entrypoint fd)
+                    (init_regs (map_regs rs args) (fn_params fd)))
 
   | exec_Iret : forall s f pc rs src,
       nth_error (fn_code f) pc = Some (Iret src) ->
       step p (State s f pc rs) (Returnstate s (rs src))
-
-  | exec_function_entry : forall s f args,
-      step p (Callstate s f args)
-             (State s f (fn_entrypoint f) (init_regs args (fn_params f)))
 
   | exec_return : forall dst f pc rs s v,
       step p (Returnstate (Stackframe dst f pc rs :: s) v)
@@ -71,7 +67,7 @@ Inductive step (p : program) : state -> state -> Prop :=
 
 Definition initial_state (p : program) (s : state) : Prop :=
   exists f, nth_error p 0 = Some f /\
-  s = Callstate nil f nil.
+  s = State nil f (fn_entrypoint f) (init_regs nil (fn_params f)).
 
 Definition final_state (s : state) (v : nat) : Prop :=
   s = Returnstate nil v.
