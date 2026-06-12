@@ -2,6 +2,80 @@ From VerifPerf Require Import Syntax Semantics Inlining.
 From Stdlib Require Import List Nat Bool Relations Arith Lia PeanoNat.
 Import ListNotations.
 
+Inductive plus {A : Type} (step : A -> A -> Prop) : A -> A -> Prop :=
+  | plus_one : forall s1 s2, step s1 s2 -> plus step s1 s2
+  | plus_step : forall s1 s2 s3, step s1 s2 -> plus step s2 s3 -> plus step s1 s3.
+
+Fixpoint apply_param_binds (rs : regset) (args params : list reg) (ro : nat) : regset :=
+  match args, params with
+  | a :: args', p :: params' =>
+      apply_param_binds (update rs (p + ro) (rs a)) args' params' ro
+  | _, _ => rs
+  end.
+
+Lemma bind_params_nil_apply_param_binds :
+  forall rs args params ro start,
+    bind_params args params ro start = [] ->
+    apply_param_binds rs args params ro = rs.
+Proof.
+  intros rs args params ro start Hnil.
+  destruct args as [|a args]; destruct params as [|param params]; simpl in *; auto; discriminate.
+Qed.
+
+Section BIND_PARAMS_EXEC.
+
+Variable prog : program.
+
+Lemma exec_bind_params :
+  forall f_tgt s rs args params ro start,
+    (forall i instr,
+      nth_error (bind_params args params ro start) i = Some instr ->
+      nth_error (fn_code f_tgt) (start + i) = Some instr) ->
+    bind_params args params ro start <> [] ->
+    plus (step prog)
+      (State s f_tgt start rs)
+      (State s f_tgt (start + length (bind_params args params ro start))
+         (apply_param_binds rs args params ro)).
+Proof.
+  intros f_tgt s rs args.
+  revert rs.
+  induction args as [|a args IH]; intros rs params ro start Hcode Hnonempty.
+  - destruct params; simpl in Hnonempty; contradiction.
+  - destruct params as [|param params].
+    + simpl in Hnonempty. contradiction.
+    + simpl.
+      assert (Hhead :
+        nth_error (fn_code f_tgt) start =
+        Some (Iop Oid [a] (param + ro) (start + 1))).
+      { assert (Hnth0 :
+          nth_error (bind_params (a :: args) (param :: params) ro start) 0 =
+          Some (Iop Oid [a] (param + ro) (start + 1))).
+        { simpl. reflexivity. }
+        specialize (Hcode 0 _ Hnth0).
+        replace (start + 0) with start in Hcode by lia.
+        exact Hcode. }
+      destruct (bind_params args params ro (start + 1)) eqn:Htail.
+      * apply plus_one.
+        simpl.
+        rewrite (bind_params_nil_apply_param_binds
+                   (update rs (param + ro) (rs a)) args params ro (start + 1) Htail).
+        eapply exec_Iop; [exact Hhead | simpl; reflexivity].
+      * replace (start + S (length (i :: l))) with (start + 1 + length (i :: l)) by lia.
+        eapply plus_step.
+        -- eapply exec_Iop; [exact Hhead | simpl; reflexivity].
+        -- rewrite <- Htail.
+           eapply IH.
+           ++ intros i0 instr Hnth.
+              pose proof (Hcode (S i0) instr) as Hcode'.
+              simpl in Hcode'.
+              specialize (Hcode' Hnth).
+              replace (start + S i0) with (start + 1 + i0) in Hcode' by lia.
+              exact Hcode'.
+           ++ rewrite Htail. discriminate.
+Qed.
+
+End BIND_PARAMS_EXEC.
+
 Section INLINING_PROOF.
 
 Variable p : program.
@@ -126,10 +200,6 @@ Proof.
 Qed.
 
 (** * Preservation lemmas *)
-
-Inductive plus (step : state -> state -> Prop) : state -> state -> Prop :=
-  | plus_one : forall s1 s2, step s1 s2 -> plus step s1 s2
-  | plus_step : forall s1 s2 s3, step s1 s2 -> plus step s2 s3 -> plus step s1 s3.
 
 Lemma other_func_preserved : forall i f,
   i <> cs_caller cs ->
@@ -556,12 +626,34 @@ Proof.
       rewrite H0 in *. rewrite H1 in *. rewrite H4 in *. rewrite H5 in *. rewrite Hinl in *.
       clear H0 H1 H4 H5 Hcall pc Hinl. 
 
-      eexists. split.
+      exists (State s_tgt f_tgt node_offset
+                (apply_param_binds rs_tgt call_args (fn_params callee) reg_offset)).
+      split.
       (* step through the no-op and the call arg movements *)
-      * admit.
+      * destruct (bind_params call_args (fn_params callee) reg_offset
+                    (length (fn_code caller))) eqn:Hbinds.
+        -- unfold node_offset. simpl.
+           replace (apply_param_binds rs_tgt call_args (fn_params callee) reg_offset)
+             with rs_tgt.
+           2:{ symmetry. eapply bind_params_nil_apply_param_binds. exact Hbinds. }
+           replace (length (fn_code caller) + 0) with (length (fn_code caller)) by lia.
+           apply plus_one. apply exec_Inop. exact HInop.
+        -- eapply plus_step.
+           ++ apply exec_Inop. exact HInop.
+           ++ unfold node_offset. simpl.
+              replace (length (fn_code caller) + S (length l))
+                with (length (fn_code caller) +
+                      length (bind_params call_args (fn_params callee) reg_offset
+                                (length (fn_code caller)))) by
+                  (rewrite Hbinds; simpl; lia).
+              eapply (exec_bind_params p' f_tgt s_tgt rs_tgt call_args
+                        (fn_params callee) reg_offset (length (fn_code caller))).
+              ** intros j instr Hnth.
+                 eapply param_bind_at; eauto.
+              ** rewrite Hbinds. discriminate.
 
       (* match states *)
-      * admit.
+      * 
 
 
       (* TODO: following two cases are esentially the same, we ought to merge them into
