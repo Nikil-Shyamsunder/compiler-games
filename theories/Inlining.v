@@ -14,7 +14,8 @@ Definition max_reg_instr (i : instruction) : nat :=
 
 (* Maximum register used in a function *)
 Definition max_reg_func (f : function) : nat :=
-  fold_left (fun acc i => max acc (max_reg_instr i)) (fn_code f) 0.
+  max (fold_left (fun acc i => max acc (max_reg_instr i)) (fn_code f) 0)
+      (fold_left max (fn_params f) 0).
 
 (* Offset all registers in an instruction *)
 Definition remap_regs (offset : nat) (i : instruction) : instruction :=
@@ -235,8 +236,9 @@ Lemma max_reg_func_bound : forall f instr pc,
 Proof.
   intros f instr pc hInstr.
   unfold max_reg_func.
-  apply fold_left_max_fun_in.
-  eapply nth_error_In; eauto.
+  eapply PeanoNat.Nat.le_trans.
+  - apply fold_left_max_fun_in. eapply nth_error_In; eauto.
+  - apply PeanoNat.Nat.le_max_l.
 Qed.
 
 Lemma instr_regs_bounded : forall f pc instr r,
@@ -249,3 +251,13 @@ Proof.
   - eapply max_reg_func_bound; eauto.
 Qed.
 
+Lemma max_reg_func_param_bound : forall f r,
+  In r (fn_params f) ->
+  r <= max_reg_func f.
+Proof.
+  intros f r Hr.
+  unfold max_reg_func.
+  apply PeanoNat.Nat.le_trans with (m := fold_left max (fn_params f) 0).
+  - apply fold_left_max_in. exact Hr.
+  - apply PeanoNat.Nat.le_max_r.
+Qed.
