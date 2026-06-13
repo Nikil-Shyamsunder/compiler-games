@@ -52,7 +52,7 @@ Fixpoint bind_params (args : list reg) (params : list reg) (reg_offset : nat)
 (* Replace Iret in the callee body with Iop Oid [src+offset] dst succ *)
 Definition replace_ret (i : instruction) (reg_offset : nat) (dst : reg) (succ : node) : instruction :=
   match i with
-  | Iret src => Iop Oid [src + reg_offset] dst succ
+  | Iret src => Iop Oid [src] dst succ
   | other => other
   end.
 

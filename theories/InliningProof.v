@@ -113,6 +113,16 @@ Let call_args := match nth_error (fn_code caller) (cs_pc cs) with
                  | _ => []
                  end.
 
+Let call_dst := match nth_error (fn_code caller) (cs_pc cs) with
+                | Some (Icall _ _ dst _) => dst
+                | _ => 0
+                end.
+
+Let call_succ := match nth_error (fn_code caller) (cs_pc cs) with
+                 | Some (Icall _ _ _ succ) => succ
+                 | _ => 0
+                 end.
+
 Let node_offset := length (fn_code caller) +
                    length (bind_params call_args (fn_params callee)
                              reg_offset (length (fn_code caller))).
@@ -122,6 +132,10 @@ Definition regs_agree (rs_src rs_tgt : regset) : Prop :=
 
 Definition high_regs_zero (rs : regset) : Prop :=
   forall r, max_reg_func caller < r -> rs r = 0.
+
+Definition frame_regs_rel (fi dst : nat) (rs_src rs_tgt : regset) : Prop :=
+  (fi <> cs_caller cs -> rs_src = rs_tgt) /\
+  (fi = cs_caller cs -> regs_agree rs_src rs_tgt).
 
 Lemma high_regs_zero_update : forall rs dst v,
   high_regs_zero rs ->
@@ -169,7 +183,7 @@ Inductive match_stacks : list stackframe -> list stackframe -> Prop :=
   | match_stacks_nil :
       match_stacks nil nil
   | match_stacks_cons : forall dst fi f_src f_tgt pc rs_src rs_tgt s_src s_tgt,
-      regs_agree rs_src rs_tgt ->
+      frame_regs_rel fi dst rs_src rs_tgt ->
       nth_error p fi = Some f_src ->
       nth_error p' fi = Some f_tgt ->
       match_stacks s_src s_tgt ->
@@ -185,7 +199,6 @@ Inductive match_states : state -> state -> Prop :=
       match_stacks s_src s_tgt ->
       (fi <> cs_caller cs -> rs_src = rs_tgt) ->
       (fi = cs_caller cs -> regs_agree rs_src rs_tgt) ->
-      (fi = cs_caller cs -> high_regs_zero rs_tgt) ->
       nth_error p fi = Some f_src ->
       nth_error p' fi = Some f_tgt ->
       match_states (State s_src f_src pc rs_src)
@@ -195,17 +208,16 @@ Inductive match_states : state -> state -> Prop :=
       (pc_callee : node) (rs_callee_src rs_tgt : regset) caller_tgt,
       match_stacks s_src s_tgt ->
       regs_agree rs_caller_src rs_caller_tgt ->
-      high_regs_zero rs_caller_tgt ->
+      nth_error p (cs_caller cs) = Some caller ->
+      nth_error (fn_code caller) (cs_pc cs) = Some (Icall call_target call_args dst ret_pc) ->
+      regs_agree rs_caller_src rs_tgt ->
       (forall r, rs_callee_src r = rs_tgt (r + reg_offset)) ->
       nth_error p' (cs_caller cs) = Some caller_tgt ->
       match_states
         (State ((Stackframe dst caller ret_pc rs_caller_src) :: s_src)
                callee pc_callee rs_callee_src)
         (State s_tgt caller_tgt (pc_callee + node_offset) rs_tgt)
-  | match_returnstate : forall s_src s_tgt v,
-      match_stacks s_src s_tgt ->
-      match_states (Returnstate s_src v)
-                   (Returnstate s_tgt v).
+  .
 
 (** * Tactics *)
 
@@ -393,11 +405,11 @@ Proof. solve_inline_preserves_field. Qed.
 
 Lemma inlined_body_at : forall pc_callee instr,
   nth_error (fn_code callee) pc_callee = Some instr ->
-  exists caller_f' dst succ,
+  exists caller_f',
     nth_error p' (cs_caller cs) = Some caller_f' /\
     nth_error (fn_code caller_f') (pc_callee + node_offset) =
       Some (replace_ret (remap_nodes node_offset (remap_regs reg_offset instr))
-                        reg_offset dst succ).
+                        reg_offset call_dst call_succ).
 Proof.
   intros pc_callee instr Hinstr.
   unpack_inline.
@@ -406,7 +418,7 @@ Proof.
   injection Hinl_func as Hcf'.
   assert (Hcaller_f' : nth_error p' (cs_caller cs) = Some caller_f').
   { rewrite Hp'. apply nth_error_replace_same. nth_error_some_lt. }
-  exists caller_f', call_d, call_s. split; [exact Hcaller_f' |].
+  exists caller_f'. split; [exact Hcaller_f' |].
   rewrite <- Hcf'. simpl.
   unfold inline_call_site.
   set (ro := max_reg_func the_caller + 1).
@@ -421,9 +433,15 @@ Proof.
   { unfold pc. rewrite length_app. simpl. rewrite length_skipn, length_firstn. lia. }
   rewrite Hcallee_eq in Hinstr.
   assert (Hro_eq : reg_offset = ro) by (unfold reg_offset; rewrite Hcaller_eq; reflexivity).
+  assert (Hdst_eq : call_dst = call_d).
+  { unfold call_dst.
+    rewrite Hcaller_eq, Hcall_instr. reflexivity. }
+  assert (Hsucc_eq : call_succ = call_s).
+  { unfold call_succ.
+    rewrite Hcaller_eq, Hcall_instr. reflexivity. }
   assert (Hno_eq : node_offset = no + length pb).
   { unfold node_offset. rewrite Hcaller_eq, Hcallee_eq, Hcall_args_eq. reflexivity. }
-  rewrite Hro_eq, Hno_eq.
+  rewrite Hro_eq, Hno_eq, Hdst_eq, Hsucc_eq.
   rewrite app_assoc.
   rewrite nth_error_app2.
   2: { rewrite length_app, Hpc_len. unfold no. lia. }
@@ -549,6 +567,32 @@ Proof.
   destruct (Nat.eqb r dst); auto.
 Qed.
 
+Lemma regs_agree_update_high : forall rs_src rs_tgt dst v,
+  regs_agree rs_src rs_tgt ->
+  max_reg_func caller < dst ->
+  regs_agree rs_src (update rs_tgt dst v).
+Proof.
+  unfold regs_agree, update. intros rs_src rs_tgt dst v Hagree Hhigh r Hr.
+  destruct (Nat.eqb r dst) eqn:Heq.
+  - apply Nat.eqb_eq in Heq. subst r. lia.
+  - apply Hagree. exact Hr.
+Qed.
+
+Lemma regs_agree_apply_param_binds : forall rs_src rs_tgt args params,
+  regs_agree rs_src rs_tgt ->
+  regs_agree rs_src (apply_param_binds rs_tgt args params reg_offset).
+Proof.
+  intros rs_src rs_tgt args.
+  revert rs_tgt.
+  induction args as [|a args IH]; intros rs_tgt params Hagree.
+  - destruct params; simpl; exact Hagree.
+  - destruct params as [|param params]; simpl.
+    + exact Hagree.
+    + apply IH.
+      apply regs_agree_update_high; [exact Hagree|].
+      unfold reg_offset. lia.
+Qed.
+
 Lemma map_regs_agree : forall rs_src rs_tgt f pc instr args,
   regs_agree rs_src rs_tgt ->
   nth_error p (cs_caller cs) = Some f ->
@@ -668,7 +712,6 @@ Proof.
     + exact H1.
     + exact H2.
     + exact H3.
-    + exact H4.
 
   - (* exec_Iop, caller *)
     exists (State s_tgt f_tgt pc' (update rs_tgt dst v)). split.
@@ -678,9 +721,12 @@ Proof.
     apply (exec_Iop _ _ _ _ _ op args). apply (code_at_pc_preserved fi f_src); try assumption.
     apply (pc_ne_cs_pc _ f_src _ (Iop op args dst pc')); try assumption. discriminate.
     specialize (H1 Hcaller) as Hagree.
-    replace (map_regs rs_tgt args) with (map_regs rs_src args). exact H11.
-    apply (map_regs_agree _ _ f_src pc (Iop op args dst pc')); auto.
-    rewrite <- Hcaller. assumption. intros. simpl. right. assumption.
+    replace (map_regs rs_tgt args) with (map_regs rs_src args).
+    2:{ apply (map_regs_agree _ _ f_src pc (Iop op args dst pc')); auto.
+        rewrite <- Hcaller. assumption. intros. simpl. right. assumption. }
+    match goal with
+    | [ Heval : eval_op op (map_regs rs_src args) = Some v |- _ ] => exact Heval
+    end.
 
     (* match states *)
     apply (match_normal s_src s_tgt fi f_src f_tgt pc'
@@ -690,24 +736,8 @@ Proof.
       assert (rs_src = rs_tgt) by auto.
       subst rs_tgt. reflexivity.
     + intro Hignore. apply regs_agree_update, H1, Hcaller.
-
-    (* updating the `dst` register with value `v` won't break high_regs_zero *)
-    + intros Hfi r Hr.
-      unfold high_regs_zero, update.
-      destruct (Nat.eqb r dst) eqn:Heq.
-      (* `r` is the destination register and is in the high registers is impossible *)
-      * apply Nat.eqb_eq in Heq. subst r.
-        assert (Hf : caller = f_src).
-        { subst fi. unfold caller. rewrite H3. reflexivity. }
-        subst f_src.
-        exfalso.
-        assert (dst <= max_reg_func caller) by
-          (eapply instr_regs_bounded; [exact H10 | simpl; left; reflexivity]).
-        lia.
-      (* high registers are still 0 *)
-      * apply H2. exact Hfi. exact Hr.
+    + exact H2.
     + exact H3.
-    + exact H4.
 
     (* FIXME: duplicate code. we can probably use `e`- tactics to remove specific names and 
     generalize it? *)
@@ -716,11 +746,14 @@ Proof.
     apply plus_one. apply (exec_Icond_true _ _ _ _ _ cond _ ifnot).
     apply (code_at_pc_preserved fi f_src); try assumption.
     apply (pc_ne_cs_pc _ f_src _ (Icond cond ifso ifnot)); try assumption. discriminate.
-    replace (rs_tgt cond) with (rs_src cond). exact H11.
-    unfold regs_agree in H1.
-    apply H1. assumption. 
-    apply (max_reg_func_bound _ (Icond cond ifso ifnot) pc). 
-    unfold caller. rewrite <- Hcaller. rewrite H3. exact H10.
+    replace (rs_tgt cond) with (rs_src cond).
+    2:{ unfold regs_agree in H1.
+        apply H1. assumption.
+        apply (max_reg_func_bound _ (Icond cond ifso ifnot) pc).
+        unfold caller. rewrite <- Hcaller. rewrite H2. exact H9. }
+    match goal with
+    | [ Hcond : rs_src cond <> 0 |- _ ] => exact Hcond
+    end.
 
     (* match states *)
     eapply match_normal.
@@ -729,19 +762,20 @@ Proof.
     + exact H1.
     + exact H2.
     + exact H3.
-    + exact H4.
 
   - (* exec_Icond_false, caller *)
     exists (State s_tgt f_tgt ifnot rs_tgt). split.
     apply plus_one. apply (exec_Icond_false _ _ _ _ _ cond ifso).
     apply (code_at_pc_preserved fi f_src); try assumption.
     apply (pc_ne_cs_pc _ f_src _ (Icond cond ifso ifnot)); try assumption. discriminate.
-    replace (rs_tgt cond) with (rs_src cond). 
-    unfold regs_agree in H1.
-    assumption.
-    apply H1. apply Hcaller.
-    apply (max_reg_func_bound _ (Icond cond ifso ifnot) pc). 
-    unfold caller. rewrite <- Hcaller. rewrite H3. exact H10.
+    replace (rs_tgt cond) with (rs_src cond).
+    2:{ unfold regs_agree in H1.
+        apply H1. apply Hcaller.
+        apply (max_reg_func_bound _ (Icond cond ifso ifnot) pc).
+        unfold caller. rewrite <- Hcaller. rewrite H2. exact H9. }
+    match goal with
+    | [ Hcond : rs_src cond = 0 |- _ ] => exact Hcond
+    end.
 
     (* match states *)
     eapply match_normal; eauto.
@@ -752,12 +786,16 @@ Proof.
       [destruct (Nat.eq_dec pc (cs_pc cs)) as [Hinl | Hnotinl] |].
     + (* inlined call site: fi = cs_caller, pc = cs_pc *)
 
-      (* FIXME: this specialize rewrite situation is very ugly. *)
-      specialize (H1 Hcaller) as Hregsagree. clear H0 H1.
-      rewrite Hcaller in *. clear fi Hcaller.
-      specialize (cs_pc_in_p' f_tgt H4) as HInop.
-      destruct (cs_pc_call_target f_src H3) as [args' [dst' [succ' Hcall]]].
-      rewrite Hinl in H10. rewrite H10 in Hcall. injection Hcall. intros. subst.
+	      (* FIXME: this specialize rewrite situation is very ugly. *)
+	      specialize (H1 Hcaller) as Hregsagree. clear H0 H1.
+	      rewrite Hcaller in *. clear fi Hcaller.
+	      specialize (cs_pc_in_p' f_tgt H3) as HInop.
+	      destruct (cs_pc_call_target f_src H2) as [args' [dst' [succ' Hcall]]].
+	      match goal with
+	      | [ Hcode : nth_error (fn_code f_src) pc = Some (Icall _ _ _ _ ) |- _ ] =>
+	          rewrite Hinl in Hcode; rewrite Hcode in Hcall
+	      end.
+	      injection Hcall. intros. subst.
       clear Hcall.
 
       exists (State s_tgt f_tgt node_offset
@@ -787,170 +825,174 @@ Proof.
 	              ** rewrite Hbinds. discriminate.
 
 	      (* match states *)
-	      * assert (Hhigh : high_regs_zero rs_tgt) by (apply H2; reflexivity).
-	        assert (Hcall_args : call_args = args').
-	        { unfold call_args, caller. rewrite H3, H10. reflexivity. }
-	        assert (Hmap : map_regs rs_src call_args = map_regs rs_tgt call_args).
-	        { rewrite Hcall_args.
-	          eapply (map_regs_agree _ _ f_src (cs_pc cs)
-	                     (Icall call_target args' dst' succ')).
-	          - exact Hregsagree.
-	          - exact H3.
-	          - exact H10.
-	          - intros r Hr. simpl. right. exact Hr. }
-	        assert (Hcaller_src : caller = f_src).
-	        { unfold caller. rewrite H3. reflexivity. }
-	        assert (Hcallee_src : callee = fd).
-	        { unfold callee. rewrite H3, H10, H11. reflexivity. }
-	        subst f_src fd.
-	        eapply match_inlined.
-	        -- exact H.
-	        -- exact Hregsagree.
-	        -- exact Hhigh.
-	        -- intros r.
-	           rewrite <- Hcall_args.
-	           rewrite Hmap.
-	           rewrite init_regs_apply_param_binds; auto.
-	           intros x Hx.
-	           rewrite Hcall_args in Hx.
-	           eapply instr_regs_bounded.
-	           ++ exact H10.
-	           ++ simpl. right. exact Hx.
-	        -- exact H4.
+	      * assert (Hcall_args : call_args = args').
+	        { unfold call_args, caller. rewrite H2.
+	          match goal with
+	          | [ Hcode : nth_error (fn_code f_src) (cs_pc cs) = Some (Icall _ _ _ _) |- _ ] =>
+	              rewrite Hcode; reflexivity
+	          end. }
+	        admit.
 	      
 	      (* TODO: following two cases are esentially the same, we ought to merge them into
 	      one proof hopefully. *)
 	    + (* different call site: not the inlined callsite, but fi = cs_caller *)
-      assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs) by auto.
-      assert (Hcode_tgt : nth_error (fn_code f_tgt) pc = Some (Icall target args dst pc'))
-        by (apply (code_at_pc_preserved _ _ _ _ _ H3 H4 Hdisj H10)).
-      assert (Htgt_in_p' : exists fd_tgt, nth_error p' target = Some fd_tgt)
-        by (destruct (find_func_preserved _ _ H11) as [? | [_ ?]]; eauto).
-      destruct Htgt_in_p' as [fd_tgt Hfd_tgt].
-      assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
-      { eapply (map_regs_agree _ _ f_src pc (Icall target args dst pc'));
-        auto. rewrite <- Hcaller. assumption. intros. simpl. right. assumption. }
-      pose proof (inline_preserves_params target fd fd_tgt H11 Hfd_tgt) as Hparams.
-      eexists. split.
-      * apply plus_one. eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt].
-      * rewrite Hparams, <- Hmap.
-        eapply match_normal.
-        -- eapply match_stacks_cons; eauto.
-        -- intros _. reflexivity.
-        -- unfold regs_agree. intros. reflexivity.
-        -- intros Hfi.
-           intros r Hr.
-           eapply (init_regs_zero_above (map_regs rs_src args)
-                                        (fn_params fd_tgt)
-                                        (max_reg_func caller)).
-           ++ intros x Hx.
-              rewrite <- Hparams in Hx.
-              assert (Hle : x <= max_reg_func fd) by
-                (apply max_reg_func_param_bound; exact Hx).
-              assert (Hcaller_lookup : nth_error p (cs_caller cs) = Some fd).
-              { rewrite <- Hfi. exact H11. }
-              unfold caller.
-              rewrite Hcaller_lookup.
-              exact Hle.
-           ++ exact Hr.
-        -- exact H11.
-        -- exact Hfd_tgt.
-    + (* different call site: fi <> cs_caller *)
-      assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs) by auto.
-      assert (rs_src = rs_tgt) by auto. subst rs_tgt.
-      assert (Hcode_tgt : nth_error (fn_code f_tgt) pc = Some (Icall target args dst pc'))
-        by (apply (code_at_pc_preserved _ _ _ _ _ H3 H4 Hdisj H10)).
-      assert (Htgt_in_p' : exists fd_tgt, nth_error p' target = Some fd_tgt)
-        by (destruct (find_func_preserved _ _ H11) as [? | [_ ?]]; eauto).
-      destruct Htgt_in_p' as [fd_tgt Hfd_tgt].
-      pose proof (inline_preserves_params target fd fd_tgt H11 Hfd_tgt) as Hparams.
-      eexists. split.
-      * apply plus_one. eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt].
-      * rewrite Hparams.
-        eapply match_normal with (fi := target) (f_src := fd) (f_tgt := fd_tgt).
-        -- eapply match_stacks_cons; eauto.
-           unfold regs_agree; intros; reflexivity.
-        -- intros _. reflexivity.
-        -- unfold regs_agree. intros. reflexivity.
-        -- intros Hfi.
-           intros r Hr.
-           eapply (init_regs_zero_above (map_regs rs_src args)
-                                        (fn_params fd_tgt)
-                                        (max_reg_func caller)).
-           ++ intros x Hx.
-              rewrite <- Hparams in Hx.
-              assert (Hle : x <= max_reg_func fd) by
-                (apply max_reg_func_param_bound; exact Hx).
-              assert (Hcaller_lookup : nth_error p (cs_caller cs) = Some fd).
-              { rewrite <- Hfi. exact H11. }
-              unfold caller.
-              rewrite Hcaller_lookup.
-              exact Hle.
-           ++ exact Hr.
-        -- exact H11.
-        -- exact Hfd_tgt.
+	      assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs) by auto.
+	      assert (Hcode_tgt : nth_error (fn_code f_tgt) pc = Some (Icall target args dst pc'))
+	        by (apply (code_at_pc_preserved _ _ _ _ _ H2 H3 Hdisj H9)).
+	      assert (Htgt_in_p' : exists fd_tgt, nth_error p' target = Some fd_tgt)
+	        by (destruct (find_func_preserved _ _ H10) as [? | [_ ?]]; eauto).
+	      destruct Htgt_in_p' as [fd_tgt Hfd_tgt].
+	      assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
+	      { eapply (map_regs_agree _ _ f_src pc (Icall target args dst pc'));
+	        auto. rewrite <- Hcaller. assumption. intros. simpl. right. assumption. }
+	      pose proof (inline_preserves_params target fd fd_tgt H10 Hfd_tgt) as Hparams.
+	      eexists. split.
+	      * apply plus_one. eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt].
+	      * rewrite Hparams, <- Hmap.
+	        eapply match_normal.
+	        -- eapply match_stacks_cons; eauto.
+	           split.
+	           ++ intros Hneq. contradiction.
+	           ++ intros _. apply H1. exact Hcaller.
+	        -- intros _. reflexivity.
+	        -- unfold regs_agree. intros. reflexivity.
+	        -- exact H10.
+	        -- exact Hfd_tgt.
+	    + (* different call site: fi <> cs_caller *)
+	      assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs) by auto.
+	      assert (rs_src = rs_tgt) by auto. subst rs_tgt.
+	      assert (Hcode_tgt : nth_error (fn_code f_tgt) pc = Some (Icall target args dst pc'))
+	        by (apply (code_at_pc_preserved _ _ _ _ _ H2 H3 Hdisj H9)).
+	      assert (Htgt_in_p' : exists fd_tgt, nth_error p' target = Some fd_tgt)
+	        by (destruct (find_func_preserved _ _ H10) as [? | [_ ?]]; eauto).
+	      destruct Htgt_in_p' as [fd_tgt Hfd_tgt].
+	      pose proof (inline_preserves_params target fd fd_tgt H10 Hfd_tgt) as Hparams.
+	      eexists. split.
+	      * apply plus_one. eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt].
+	      * rewrite Hparams.
+	        eapply match_normal with (fi := target) (f_src := fd) (f_tgt := fd_tgt).
+	        -- eapply match_stacks_cons; eauto.
+	           split.
+	           ++ exact H0.
+	           ++ exact H1.
+	        -- intros _. reflexivity.
+	        -- unfold regs_agree. intros. reflexivity.
+	        -- exact H10.
+	        -- exact Hfd_tgt.
   
   - (* exec_Iret, caller *)
-  exists (Returnstate s_tgt (rs_tgt src)). split.
-  apply plus_one. apply exec_Iret. apply (code_at_pc_preserved fi f_src); try assumption. 
-  apply (pc_ne_cs_pc fi f_src _ (Iret src)); try assumption. discriminate.
-  
-  (* match states *)
-  replace (rs_src src) with (rs_tgt src).
-  apply (match_returnstate); assumption.
-  unfold regs_agree in H1. symmetry.
-  apply H1. assumption. apply (max_reg_func_bound _ (Iret src) pc).
-  unfold caller. rewrite <- Hcaller. rewrite H3. exact H10. 
+  inversion H as
+      [| dst0 fi0 f_src0 f_tgt0 ret_pc0 rs_caller_src rs_caller_tgt s_src0 s_tgt0
+          Hrel Hsrcf Htgtf Htail];
+    subst; clear H.
+  destruct Hrel as [Hframe_eq Hframe_agree].
+  assert (Hsrc_eq : rs_src src = rs_tgt src).
+  { destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcur | Hcur].
+    - unfold regs_agree in H1.
+      apply H1; [exact Hcur|].
+      apply (max_reg_func_bound _ (Iret src) pc).
+      unfold caller. rewrite <- Hcur. rewrite H2. exact H9.
+    - assert (rs_src = rs_tgt) by auto. subst rs_tgt. reflexivity. }
+  eexists. split.
+  * apply plus_one. eapply exec_Iret.
+    eapply (code_at_pc_preserved fi f_src f_tgt pc (Iret src)).
+    -- exact H2.
+    -- exact H3.
+    -- eapply pc_ne_cs_pc; eauto. discriminate.
+    -- exact H9.
+  * eapply match_normal with (fi := fi0) (f_src := f_caller) (f_tgt := f_tgt0).
+    -- exact Htail.
+    -- intros Hneq. specialize (Hframe_eq Hneq). subst rs_caller_tgt.
+       rewrite Hsrc_eq. reflexivity.
+    -- intros Hfi. rewrite Hsrc_eq. apply regs_agree_update. apply Hframe_agree. exact Hfi.
+    -- exact Hsrcf.
+    -- exact Htgtf.
 
     (* === match_inlined cases === *)
   - (* exec_Inop inside inlined body *)
     exists (State s_tgt caller_tgt (pc' + node_offset) rs_tgt).
     split.
     + apply plus_one. constructor.
-      destruct (inlined_body_at pc_callee (Inop pc') H9) as [cf' [d [s [Hcf' Hcode]]]].
+      match goal with
+      | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Inop pc') |- _ ] =>
+          destruct (inlined_body_at pc_callee (Inop pc') Hinstr) as [cf' [Hcf' Hcode]]
+      end.
       simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
       exact Hcode.
-    + eapply match_inlined; eauto.
-    
+	    + eapply match_inlined; [exact H | exact H0 | exact H1 | exact H2 | exact H3 | exact H4 | exact H5].
+	    
   - (* exec_Iop inside inlined body *)
     exists (State s_tgt caller_tgt (pc' + node_offset) (update rs_tgt (dst0 + reg_offset) v)).
     split.
     + apply plus_one.
-      destruct (inlined_body_at pc_callee (Iop op args dst0 pc') H9) as [cf' [d [s [Hcf' Hcode]]]].
+      match goal with
+      | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Iop op args dst0 pc') |- _ ] =>
+          destruct (inlined_body_at pc_callee (Iop op args dst0 pc') Hinstr) as [cf' [Hcf' Hcode]]
+      end.
       simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
       eapply exec_Iop; [exact Hcode |].
       unfold map_regs in *. rewrite map_map.
       replace (map (fun x => rs_tgt (x + reg_offset)) args) with (map rs_callee_src args).
-      * exact H10.
-      * apply map_ext_in. intros a _. exact (H2 a).
-    + eapply match_inlined; eauto.
-      intros r. unfold update.
-      destruct (Nat.eqb (r + reg_offset) (dst0 + reg_offset)) eqn:Heq.
-      * apply Nat.eqb_eq in Heq. assert (r = dst0) by lia. subst.
-        rewrite Nat.eqb_refl. reflexivity.
-      * apply Nat.eqb_neq in Heq. assert (r <> dst0) by lia.
-        rewrite <- H2.
-        destruct (Nat.eqb r dst0) eqn:Heq2; [apply Nat.eqb_eq in Heq2; lia | reflexivity].
+      * match goal with
+        | [ Heval : eval_op _ _ = Some _ |- _ ] =>
+            exact Heval
+        end.
+      * match goal with
+        | [ Hshift : forall r, rs_callee_src r = _ |- _ ] =>
+            apply map_ext_in; intros a _; exact (Hshift a)
+        end.
+    + eapply match_inlined.
+      * exact H.
+      * exact H0.
+      * exact H1.
+      * exact H2.
+      * apply regs_agree_update_high; [exact H3|].
+        unfold reg_offset. lia.
+      * intros r. unfold update.
+        destruct (Nat.eqb (r + reg_offset) (dst0 + reg_offset)) eqn:Heq.
+        -- apply Nat.eqb_eq in Heq. assert (r = dst0) by lia. subst.
+           rewrite Nat.eqb_refl. reflexivity.
+        -- apply Nat.eqb_neq in Heq. assert (r <> dst0) by lia.
+           match goal with
+           | [ Hshift : forall r, rs_callee_src r = _ |- _ ] =>
+               rewrite <- Hshift
+           end.
+           destruct (Nat.eqb r dst0) eqn:Heq2; [apply Nat.eqb_eq in Heq2; lia | reflexivity].
+      * exact H5.
 
   - (* exec_Icond_true inside inlined body *)
     exists (State s_tgt caller_tgt (ifso + node_offset) rs_tgt).
     split.
     + apply plus_one.
-      destruct (inlined_body_at pc_callee (Icond cond ifso ifnot) H9) as [cf' [d [s [Hcf' Hcode]]]].
+      match goal with
+      | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Icond cond ifso ifnot) |- _ ] =>
+          destruct (inlined_body_at pc_callee (Icond cond ifso ifnot) Hinstr) as [cf' [Hcf' Hcode]]
+      end.
       simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
       eapply exec_Icond_true; [exact Hcode |].
-      rewrite <- H2. exact H10.
-    + eapply match_inlined; eauto.
+      match goal with
+      | [ Hshift : forall r, rs_callee_src r = _,
+          Hcond : rs_callee_src cond <> 0 |- _ ] =>
+          rewrite <- Hshift; exact Hcond
+      end.
+	    + eapply match_inlined; [exact H | exact H0 | exact H1 | exact H2 | exact H3 | exact H4 | exact H5].
 
   - (* exec_Icond_false inside inlined body *)
     exists (State s_tgt caller_tgt (ifnot + node_offset) rs_tgt).
     split.
     + apply plus_one.
-      destruct (inlined_body_at pc_callee (Icond cond ifso ifnot) H9) as [cf' [d [s [Hcf' Hcode]]]].
+      match goal with
+      | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Icond cond ifso ifnot) |- _ ] =>
+          destruct (inlined_body_at pc_callee (Icond cond ifso ifnot) Hinstr) as [cf' [Hcf' Hcode]]
+      end.
       simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
       eapply exec_Icond_false; [exact Hcode |].
-      rewrite <- H2. exact H10.
-    + eapply match_inlined; eauto.
+      match goal with
+      | [ Hshift : forall r, rs_callee_src r = _,
+          Hcond : rs_callee_src cond = 0 |- _ ] =>
+          rewrite <- Hshift; exact Hcond
+      end.
+	    + eapply match_inlined; [exact H | exact H0 | exact H1 | exact H2 | exact H3 | exact H4 | exact H5].
 
   - (* exec_Icall inside inlined body: impossible *)
     exfalso.
@@ -962,13 +1004,37 @@ Proof.
       specialize (Hleafb x Hx). destruct x; try exact I. discriminate. }
     unfold isLeaf in Hleaf'.
     rewrite Forall_forall in Hleaf'.
-    specialize (Hleaf' _ (nth_error_In _ _ H9)). simpl in Hleaf'. exact Hleaf'.
+    match goal with
+    | [ Hinstr : nth_error (fn_code callee) pc_callee = Some _ |- _ ] =>
+        specialize (Hleaf' _ (nth_error_In _ _ Hinstr)); simpl in Hleaf'; exact Hleaf'
+    end.
 
-  - (* exec_Iret inside inlined body *) admit.
-
-  (* === match_returnstate === *)
-  - (* exec_return *) 
-  admit.
+  - (* exec_Iret inside inlined body *)
+    match goal with
+    | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Iret src) |- _ ] =>
+        destruct (inlined_body_at pc_callee (Iret src) Hinstr) as [cf' [Hcf' Hcode]]
+    end.
+    simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
+    assert (Hcall_dst : call_dst = dst).
+    { unfold call_dst. rewrite H2. reflexivity. }
+    assert (Hcall_succ : call_succ = ret_pc).
+    { unfold call_succ. rewrite H2. reflexivity. }
+    rewrite Hcall_dst, Hcall_succ in Hcode.
+    exists (State s_tgt caller_tgt ret_pc (update rs_tgt dst (rs_callee_src src))).
+    split.
+    + apply plus_one.
+      eapply exec_Iop.
+      * exact Hcode.
+      * simpl. rewrite <- H4. reflexivity.
+    + eapply match_normal with
+          (fi := cs_caller cs)
+          (f_src := caller)
+          (f_tgt := caller_tgt).
+      * exact H.
+      * intros Hneq. contradiction.
+      * intros _. apply regs_agree_update. exact H3.
+      * exact H1.
+      * exact H5.
 
 
 Admitted.
