@@ -89,8 +89,7 @@ Definition inline_in_func (caller : function) (callee : function)
   | Some (Icall _ args dst succ) =>
       Some (mk_function
         (fn_params caller)
-        (inline_call_site caller callee call_pc args dst succ)
-        (fn_entrypoint caller))
+        (inline_call_site caller callee call_pc args dst succ))
   | _ => None
   end.
 

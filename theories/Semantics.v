@@ -9,11 +9,14 @@ Definition empty_regs : regset := fun _ => 0.
 Definition update (rs : regset) (x : reg) (v : nat) : regset :=
   fun y => if Nat.eqb y x then v else rs y.
 
-Fixpoint init_regs (vals : list nat) (params : list reg) : regset :=
+Fixpoint init_regs_acc (rs : regset) (vals : list nat) (params : list reg) : regset :=
   match params, vals with
-  | p :: ps, v :: vs => update (init_regs vs ps) p v
-  | _, _ => empty_regs
+  | p :: ps, v :: vs => init_regs_acc (update rs p v) vs ps
+  | _, _ => rs
   end.
+
+Definition init_regs (vals : list nat) (params : list reg) : regset :=
+  init_regs_acc empty_regs vals params.
 
 Definition map_regs (rs : regset) (regs : list reg) : list nat :=
   map rs regs.
@@ -53,7 +56,7 @@ Inductive step (p : program) : state -> state -> Prop :=
       nth_error p target = Some fd ->
       step p (State s f pc rs)
              (State (Stackframe dst f pc' rs :: s) fd
-                    (fn_entrypoint fd)
+                    0
                     (init_regs (map_regs rs args) (fn_params fd)))
 
   | exec_Iret : forall s f pc rs src,
@@ -67,7 +70,7 @@ Inductive step (p : program) : state -> state -> Prop :=
 
 Definition initial_state (p : program) (s : state) : Prop :=
   exists f, nth_error p 0 = Some f /\
-  s = State nil f (fn_entrypoint f) (init_regs nil (fn_params f)).
+  s = State nil f 0 (init_regs nil (fn_params f)).
 
 Definition final_state (s : state) (v : nat) : Prop :=
   s = Returnstate nil v.

@@ -40,7 +40,6 @@ Definition code := list instruction.
 Record function := mk_function {
   fn_params : list reg;
   fn_code : code;
-  fn_entrypoint : node;
 }.
 
 Definition program := list function.
