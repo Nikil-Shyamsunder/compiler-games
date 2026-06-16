@@ -754,6 +754,23 @@ Proof.
   - reflexivity.
 Qed.
 
+Lemma update_shift_rel : forall rs0 rs prm v,
+  (forall x, rs0 x = rs (x + reg_offset)) ->
+  forall x,
+    update rs0 prm v x = update rs (prm + reg_offset) v (x + reg_offset).
+Proof.
+  intros rs0 rs prm v Hrel x.
+  unfold update.
+  destruct (Nat.eqb x prm) eqn:Hx.
+  - apply Nat.eqb_eq in Hx. subst x.
+    rewrite Nat.eqb_refl. reflexivity.
+  - apply Nat.eqb_neq in Hx.
+    assert (Heq : (x + reg_offset =? prm + reg_offset) = false)
+      by (apply Nat.eqb_neq; lia).
+    rewrite Heq.
+    rewrite Hrel. reflexivity.
+Qed.
+
 Lemma init_regs_acc_apply_param_binds :
   forall rs0 rs args params,
     (forall x, rs0 x = rs (x + reg_offset)) ->
@@ -761,7 +778,35 @@ Lemma init_regs_acc_apply_param_binds :
     forall r,
       init_regs_acc rs0 (map_regs rs args) params r =
       apply_param_binds rs args params reg_offset (r + reg_offset).
-Admitted.
+Proof.
+  intros rs0 rs args.
+  revert rs0 rs.
+  induction args as [|a args IH]; intros rs0 rs params Hrel Hargs r; simpl.
+  - destruct params; simpl; [apply Hrel | apply Hrel].
+  - destruct params as [|param params]; simpl.
+    + apply Hrel.
+    + specialize (IH
+                    (update rs0 param (rs a))
+                    (update rs (param + reg_offset) (rs a))
+                    params).
+      assert (Hrel' : forall x,
+                update rs0 param (rs a) x =
+                update rs (param + reg_offset) (rs a) (x + reg_offset)).
+      { apply update_shift_rel. exact Hrel. }
+      assert (Hargs' : forall a0, In a0 args -> a0 <= max_reg_func caller).
+      { intros a0 Ha0. apply Hargs. simpl. right. exact Ha0. }
+      assert (Hmap : map_regs (update rs (param + reg_offset) (rs a)) args = map_regs rs args).
+      { unfold map_regs. apply map_ext_in. intros b Hb.
+        unfold update.
+        assert (Hneq : b <> param + reg_offset).
+        { pose proof (Hargs' b Hb) as Hbnd. intro Heq. subst b.
+          unfold reg_offset in *. lia. }
+        assert (Heq : (b =? param + reg_offset) = false)
+          by (apply Nat.eqb_neq; exact Hneq).
+        rewrite Heq. reflexivity. }
+      rewrite Hmap in IH.
+      specialize (IH Hrel' Hargs' r). exact IH.
+Qed.
 
 Lemma init_regs_apply_param_binds :
   forall rs args params,
@@ -770,7 +815,13 @@ Lemma init_regs_apply_param_binds :
     forall r,
       init_regs (map_regs rs args) params r =
       apply_param_binds rs args params reg_offset (r + reg_offset).
-Admitted.
+Proof.
+  intros rs args params Hundef Hargs r.
+  unfold init_regs.
+  eapply init_regs_acc_apply_param_binds.
+  - intros x. unfold empty_regs. symmetry. apply Hundef. lia.
+  - exact Hargs.
+Qed.
 
 (* For non-caller functions, rs_src = rs_tgt *)
 Ltac solve_rs_eq :=
