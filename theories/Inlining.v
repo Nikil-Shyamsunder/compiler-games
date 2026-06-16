@@ -67,7 +67,7 @@ Definition transform_callee_body (body : code) (reg_offset : nat)
    Layout:  [patched_caller (len=|caller|)] [param_binds] [callee_body]
    Indices:  0..call_pc..len-1               len..         len+|binds|..
 
-   Execution: ... -> Inop@call_pc -> param_bind_0 -> ... -> callee_entry -> ... -> Iop Oid@ret -> succ
+   Execution: ... -> Inop@call_pc -> param_bind_0 -> ... -> callee_entry -> ...
 *)
 Definition inline_call_site (caller : function) (callee : function)
     (call_pc : nat) (args : list reg) (dst : reg) (succ : node) : code :=
