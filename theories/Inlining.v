@@ -49,6 +49,15 @@ Fixpoint bind_params (args : list reg) (params : list reg) (reg_offset : nat)
   | _, _ => []
   end.
 
+(* Zero out the callee's fresh register range before binding arguments. *)
+Fixpoint zero_regs (count reg_offset start_node : nat) : list instruction :=
+  match count with
+  | 0 => []
+  | S count' =>
+      Iop (Oconst 0) [] (reg_offset + count') (start_node + 1) ::
+      zero_regs count' reg_offset (start_node + 1)
+  end.
+
 (* Replace Iret in the callee body with Iop Oid [src+offset] dst succ *)
 Definition replace_ret (i : instruction) (reg_offset : nat) (dst : reg) (succ : node) : instruction :=
   match i with
@@ -64,8 +73,8 @@ Definition transform_callee_body (body : code) (reg_offset : nat)
 
 (* Inline a single call site within a caller function.
 
-   Layout:  [patched_caller (len=|caller|)] [param_binds] [callee_body]
-   Indices:  0..call_pc..len-1               len..         len+|binds|..
+   Layout:  [patched_caller (len=|caller|)] [zero_regs] [param_binds] [callee_body]
+   Indices:  0..call_pc..len-1               len..       len+|zero|..    len+|zero|+|binds|..
 
    Execution: ... -> Inop@call_pc -> param_bind_0 -> ... -> callee_entry -> ...
 *)
@@ -73,13 +82,16 @@ Definition inline_call_site (caller : function) (callee : function)
     (call_pc : nat) (args : list reg) (dst : reg) (succ : node) : code :=
   let reg_offset := max_reg_func caller + 1 in
   let node_offset := length (fn_code caller) in
-  let param_binds := bind_params args (fn_params callee) reg_offset node_offset in
+  let zero_init := zero_regs (S (max_reg_func callee)) reg_offset node_offset in
+  let param_binds := bind_params args (fn_params callee) reg_offset
+                       (node_offset + length zero_init) in
   let callee_body := transform_callee_body (fn_code callee) reg_offset
-                       (node_offset + length param_binds) dst succ in
+                       (node_offset + length zero_init + length param_binds) dst succ in
   let patched_caller := firstn call_pc (fn_code caller)
                         ++ Inop node_offset
                         :: skipn (call_pc + 1) (fn_code caller) in
-  patched_caller ++ param_binds ++ callee_body.
+  let prefix := patched_caller ++ zero_init ++ param_binds in
+  prefix ++ callee_body.
 
 (* Inline a specific call site (identified by pc) within a function.
    Returns None if the pc doesn't point to an Icall. *)

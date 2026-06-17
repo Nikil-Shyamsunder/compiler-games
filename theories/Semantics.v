@@ -2,23 +2,23 @@ From VerifPerf Require Import Syntax.
 From Stdlib Require Import List Nat Bool.
 Import ListNotations.
 
-Definition regset := reg -> value.
+Definition regset := reg -> nat.
 
-Definition empty_regs : regset := fun _ => Vundef.
+Definition empty_regs : regset := fun _ => 0.
 
-Definition update (rs : regset) (x : reg) (v : value) : regset :=
+Definition update (rs : regset) (x : reg) (v : nat) : regset :=
   fun y => if Nat.eqb y x then v else rs y.
 
-Fixpoint init_regs_acc (rs : regset) (vals : list value) (params : list reg) : regset :=
+Fixpoint init_regs_acc (rs : regset) (vals : list nat) (params : list reg) : regset :=
   match params, vals with
   | p :: ps, v :: vs => init_regs_acc (update rs p v) vs ps
   | _, _ => rs
   end.
 
-Definition init_regs (vals : list value) (params : list reg) : regset :=
+Definition init_regs (vals : list nat) (params : list reg) : regset :=
   init_regs_acc empty_regs vals params.
 
-Definition map_regs (rs : regset) (regs : list reg) : list value :=
+Definition map_regs (rs : regset) (regs : list reg) : list nat :=
   map rs regs.
 
 (* TODO: should this just be a record? *)
@@ -41,12 +41,12 @@ Inductive step (p : program) : state -> state -> Prop :=
 
   | exec_Icond_true : forall s f pc rs cond ifso ifnot,
       nth_error (fn_code f) pc = Some (Icond cond ifso ifnot) ->
-      rs cond <> Vnat 0 ->
+      rs cond <> 0 ->
       step p (State s f pc rs) (State s f ifso rs)
 
   | exec_Icond_false : forall s f pc rs cond ifso ifnot,
       nth_error (fn_code f) pc = Some (Icond cond ifso ifnot) ->
-      rs cond = Vnat 0 \/ rs cond = Vundef ->
+      rs cond = 0 ->
       step p (State s f pc rs) (State s f ifnot rs)
 
   | exec_Icall : forall s f pc rs target args dst pc' fd,
@@ -67,7 +67,7 @@ Definition initial_state (p : program) (s : state) : Prop :=
   exists f, nth_error p 0 = Some f /\
   s = State nil f 0 (init_regs nil (fn_params f)).
 
-Definition final_state (s : state) (v : value) : Prop :=
+Definition final_state (s : state) (v : nat) : Prop :=
   exists f pc rs src,
     s = State nil f pc rs /\
     nth_error (fn_code f) pc = Some (Iret src) /\
