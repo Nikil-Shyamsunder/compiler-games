@@ -804,7 +804,14 @@ Lemma init_regs_apply_param_binds :
       r <= max_reg_func callee ->
       init_regs (map_regs rs args) params r =
       apply_param_binds rs args params reg_offset (r + reg_offset).
-Admitted.
+Proof.
+  intros rs args params Hzero Hargs r Hr.
+  unfold init_regs.
+  eapply init_regs_acc_apply_param_binds.
+  - intros x Hx. simpl. symmetry. apply Hzero. exact Hx.
+  - exact Hargs.
+  - exact Hr.
+Qed.
 
 (* For non-caller functions, rs_src = rs_tgt *)
 Ltac solve_rs_eq :=
