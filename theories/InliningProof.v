@@ -471,13 +471,89 @@ Proof.
   apply nth_error_replace_same. nth_error_some_lt.
 Qed.
 
+(* The caller is found in p at cs_caller cs *)
+Lemma caller_in_p : nth_error p (cs_caller cs) = Some caller.
+Proof.
+  unpack_inline. rewrite Hcaller_eq. reflexivity.
+Qed.
+
+(* The function stored at cs_caller in p' has exactly the inlined code *)
+Lemma caller_tgt_code : forall f_tgt,
+  nth_error p' (cs_caller cs) = Some f_tgt ->
+  fn_code f_tgt =
+    inline_call_site caller callee (cs_pc cs) call_args call_dst call_succ.
+Proof.
+  intros f_tgt Hf. unpack_inline.
+  assert (Hf' : f_tgt = caller_f').
+  { rewrite Hp' in Hf. rewrite nth_error_replace_same in Hf
+      by (apply nth_error_Some; congruence).
+    injection Hf as ->. reflexivity. }
+  subst f_tgt.
+  unfold inline_in_func in Hinl_func.
+  rewrite Hcall_instr in Hinl_func.
+  injection Hinl_func as Hcf'.
+  rewrite <- Hcf'. simpl (fn_code _).
+  rewrite <- Hcaller_eq, <- Hcallee_eq, <- Hcall_args_eq.
+  assert (Ed : call_dst = call_d)
+    by (unfold call_dst; rewrite Hcaller_eq, Hcall_instr; reflexivity).
+  assert (Es : call_succ = call_s)
+    by (unfold call_succ; rewrite Hcaller_eq, Hcall_instr; reflexivity).
+  rewrite Ed, Es. reflexivity.
+Qed.
+
+(* Right-associated form of inline_call_site, for clean nth_error reasoning. *)
+Lemma inline_call_site_eq : forall call_pc args dst succ,
+  inline_call_site caller callee call_pc args dst succ =
+  (firstn call_pc (fn_code caller) ++
+     Inop (length (fn_code caller)) :: skipn (call_pc + 1) (fn_code caller))
+  ++ (zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller)))
+  ++ (bind_params args (fn_params callee) reg_offset
+        (length (fn_code caller)
+           + length (zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller)))))
+  ++ (transform_callee_body (fn_code callee) reg_offset
+        (length (fn_code caller)
+           + length (zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller)))
+           + length (bind_params args (fn_params callee) reg_offset
+                      (length (fn_code caller)
+                         + length (zero_regs (S (max_reg_func callee)) reg_offset
+                                     (length (fn_code caller)))))) dst succ).
+Proof.
+  intros. unfold inline_call_site. rewrite <- !app_assoc. reflexivity.
+Qed.
+
+(* Instructions in the patched caller region (other than the rewritten call
+   site) are preserved. *)
+Lemma inline_call_site_caller_region : forall call_pc args dst succ pc instr,
+  pc <> call_pc ->
+  pc < length (fn_code caller) ->
+  nth_error (fn_code caller) pc = Some instr ->
+  nth_error (inline_call_site caller callee call_pc args dst succ) pc = Some instr.
+Proof.
+  intros call_pc args dst succ pc instr Hne Hlt Hcode.
+  rewrite inline_call_site_eq.
+  set (patched := firstn call_pc (fn_code caller) ++
+                  Inop (length (fn_code caller)) :: skipn (call_pc + 1) (fn_code caller)).
+  assert (Hp : nth_error patched pc = Some instr)
+    by (subst patched; rewrite nth_error_replace_other; auto).
+  assert (Hpl : pc < length patched)
+    by (apply nth_error_Some; rewrite Hp; discriminate).
+  rewrite nth_error_app1 by exact Hpl.
+  exact Hp.
+Qed.
+
 Lemma other_pc_preserved : forall pc i,
   pc <> cs_pc cs ->
   nth_error (fn_code caller) pc = Some i ->
   exists caller', nth_error p' (cs_caller cs) = Some caller' /\
                   nth_error (fn_code caller') pc = Some i.
 Proof.
-Admitted.
+  intros pc i Hne Hcode.
+  destruct caller_in_p' as [caller' Hcaller'].
+  exists caller'. split; [exact Hcaller'|].
+  rewrite (caller_tgt_code caller' Hcaller').
+  apply inline_call_site_caller_region; auto.
+  apply nth_error_Some. rewrite Hcode. discriminate.
+Qed.
 
 Lemma find_func_preserved : forall target fd,
   nth_error p target = Some fd ->
@@ -608,6 +684,19 @@ Proof.
   rewrite nth_error_replace_same; auto.
 Qed.
 
+(* The instruction at cs_pc is the canonical Icall with all canonical fields *)
+Lemma caller_call_instr :
+  nth_error (fn_code caller) (cs_pc cs) =
+    Some (Icall call_target call_args call_dst call_succ).
+Proof.
+  destruct (cs_pc_is_call caller caller_in_p) as [t [a [d [s H]]]].
+  assert (Et : call_target = t) by (unfold call_target; rewrite H; reflexivity).
+  assert (Ea : call_args = a) by (unfold call_args; rewrite H; reflexivity).
+  assert (Ed : call_dst = d) by (unfold call_dst; rewrite H; reflexivity).
+  assert (Es : call_succ = s) by (unfold call_succ; rewrite H; reflexivity).
+  subst. exact H.
+Qed.
+
 (* The zero-init prefix is placed immediately after the patched caller *)
 Lemma inline_call_site_zero_regs_at : forall call_pc args dst succ i instr,
   nth_error (fn_code caller) call_pc = Some (Icall call_target args dst succ) ->
@@ -616,9 +705,108 @@ Lemma inline_call_site_zero_regs_at : forall call_pc args dst succ i instr,
   nth_error (inline_call_site caller callee call_pc args dst succ)
             (length (fn_code caller) + i) = Some instr.
 Proof.
-Admitted.
+  intros call_pc args dst succ i instr Hcall Hz.
+  assert (Hlt : call_pc < length (fn_code caller))
+    by (apply nth_error_Some; rewrite Hcall; discriminate).
+  rewrite inline_call_site_eq.
+  set (patched := firstn call_pc (fn_code caller) ++
+                  Inop (length (fn_code caller)) :: skipn (call_pc + 1) (fn_code caller)).
+  set (zero_init := zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller))) in *.
+  assert (Hi : i < length zero_init)
+    by (apply nth_error_Some; rewrite Hz; discriminate).
+  assert (Hlen_patched : length patched = length (fn_code caller))
+    by (subst patched; rewrite length_replace_nth; auto).
+  rewrite <- Hlen_patched.
+  rewrite nth_error_app_offset.
+  rewrite nth_error_app1 by exact Hi.
+  exact Hz.
+Qed.
 
-(* TODO: This proof is very ugly *)
+(* The param-binding prefix follows the zero-init prefix *)
+Lemma inline_call_site_param_region : forall call_pc args dst succ i instr,
+  call_pc < length (fn_code caller) ->
+  nth_error (bind_params args (fn_params callee) reg_offset
+              (length (fn_code caller)
+                 + length (zero_regs (S (max_reg_func callee)) reg_offset
+                             (length (fn_code caller))))) i = Some instr ->
+  nth_error (inline_call_site caller callee call_pc args dst succ)
+    (length (fn_code caller)
+       + length (zero_regs (S (max_reg_func callee)) reg_offset
+                   (length (fn_code caller))) + i) = Some instr.
+Proof.
+  intros call_pc args dst succ i instr Hlt Hb.
+  rewrite inline_call_site_eq.
+  set (patched := firstn call_pc (fn_code caller) ++
+                  Inop (length (fn_code caller)) :: skipn (call_pc + 1) (fn_code caller)).
+  set (zero_init := zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller))) in *.
+  set (param_binds := bind_params args (fn_params callee) reg_offset
+                      (length (fn_code caller) + length zero_init)) in *.
+  assert (Hi : i < length param_binds)
+    by (apply nth_error_Some; rewrite Hb; discriminate).
+  assert (Hlen_patched : length patched = length (fn_code caller))
+    by (subst patched; rewrite length_replace_nth; auto).
+  rewrite <- Hlen_patched.
+  replace (length patched + length zero_init + i)
+    with (length patched + (length zero_init + i)) by lia.
+  rewrite nth_error_app_offset.
+  rewrite nth_error_app_offset.
+  rewrite nth_error_app1 by exact Hi.
+  exact Hb.
+Qed.
+
+(* The transformed callee body follows the param-binding prefix *)
+Lemma inline_call_site_body_region : forall call_pc args dst succ pc_callee instr,
+  call_pc < length (fn_code caller) ->
+  nth_error (fn_code callee) pc_callee = Some instr ->
+  nth_error (inline_call_site caller callee call_pc args dst succ)
+    (length (fn_code caller)
+       + length (zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller)))
+       + length (bind_params args (fn_params callee) reg_offset
+                  (length (fn_code caller)
+                     + length (zero_regs (S (max_reg_func callee)) reg_offset
+                                 (length (fn_code caller)))))
+       + pc_callee) =
+    Some (replace_ret (remap_nodes
+            (length (fn_code caller)
+               + length (zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller)))
+               + length (bind_params args (fn_params callee) reg_offset
+                          (length (fn_code caller)
+                             + length (zero_regs (S (max_reg_func callee)) reg_offset
+                                         (length (fn_code caller))))))
+            (remap_regs reg_offset instr)) reg_offset dst succ).
+Proof.
+  intros call_pc args dst succ pc_callee instr Hlt Hcode.
+  rewrite inline_call_site_eq.
+  set (patched := firstn call_pc (fn_code caller) ++
+                  Inop (length (fn_code caller)) :: skipn (call_pc + 1) (fn_code caller)).
+  set (zero_init := zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller))) in *.
+  set (param_binds := bind_params args (fn_params callee) reg_offset
+                      (length (fn_code caller) + length zero_init)) in *.
+  assert (Hlen_patched : length patched = length (fn_code caller))
+    by (subst patched; rewrite length_replace_nth; auto).
+  rewrite <- Hlen_patched.
+  replace (length patched + length zero_init + length param_binds + pc_callee)
+    with (length patched + (length zero_init + (length param_binds + pc_callee))) by lia.
+  rewrite nth_error_app_offset.
+  rewrite nth_error_app_offset.
+  rewrite nth_error_app_offset.
+  unfold transform_callee_body.
+  rewrite (nth_error_map_some _ _ _ _ _ _ Hcode).
+  rewrite Hlen_patched. reflexivity.
+Qed.
+
+(* node_offset is the start of the transformed callee body inside inline_call_site *)
+Lemma node_offset_eq :
+  node_offset = length (fn_code caller)
+    + length (zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller)))
+    + length (bind_params call_args (fn_params callee) reg_offset
+               (length (fn_code caller)
+                  + length (zero_regs (S (max_reg_func callee)) reg_offset
+                              (length (fn_code caller))))).
+Proof.
+  unfold node_offset, zero_offset, zero_len. reflexivity.
+Qed.
+
 Lemma inlined_body_at : forall pc_callee instr,
   nth_error (fn_code callee) pc_callee = Some instr ->
   exists caller_f',
@@ -627,7 +815,16 @@ Lemma inlined_body_at : forall pc_callee instr,
       Some (replace_ret (remap_nodes node_offset (remap_regs reg_offset instr))
                         reg_offset call_dst call_succ).
 Proof.
-Admitted.
+  intros pc_callee instr Hcode.
+  destruct caller_in_p' as [caller' Hcaller'].
+  exists caller'. split; [exact Hcaller'|].
+  rewrite (caller_tgt_code caller' Hcaller').
+  replace (pc_callee + node_offset) with (node_offset + pc_callee) by lia.
+  rewrite node_offset_eq.
+  apply inline_call_site_body_region.
+  - apply nth_error_Some. rewrite caller_call_instr. discriminate.
+  - exact Hcode.
+Qed.
 
 (* Instruction at position (length (fn_code caller) + i) in modified caller
    is the i-th zero-init instruction *)
@@ -636,7 +833,12 @@ Lemma zero_regs_at : forall f_tgt i instr,
   nth_error (zero_regs zero_len reg_offset (length (fn_code caller))) i = Some instr ->
   nth_error (fn_code f_tgt) (length (fn_code caller) + i) = Some instr.
 Proof.
-Admitted.
+  intros f_tgt i instr Hf Hz.
+  rewrite (caller_tgt_code f_tgt Hf).
+  apply inline_call_site_zero_regs_at.
+  - exact caller_call_instr.
+  - exact Hz.
+Qed.
 
 (* Instruction at position (length (fn_code caller) + length zero_init + i) in modified caller
    is the i-th param bind instruction *)
@@ -646,14 +848,27 @@ Lemma param_bind_at : forall f_tgt i instr,
                (length (fn_code caller) + zero_len)) i = Some instr ->
   nth_error (fn_code f_tgt) (length (fn_code caller) + zero_len + i) = Some instr.
 Proof.
-Admitted.
+  intros f_tgt i instr Hf Hb.
+  rewrite (caller_tgt_code f_tgt Hf).
+  assert (Hzl : zero_len =
+    length (zero_regs (S (max_reg_func callee)) reg_offset (length (fn_code caller))))
+    by (unfold zero_len; rewrite length_zero_regs; reflexivity).
+  rewrite Hzl in Hb |- *.
+  apply inline_call_site_param_region.
+  - apply nth_error_Some. rewrite caller_call_instr. discriminate.
+  - exact Hb.
+Qed.
 
 (* The instruction at cs_pc in the modified caller is Inop jumping to param binds *)
 Lemma cs_pc_in_p' : forall f_tgt,
   nth_error p' (cs_caller cs) = Some f_tgt ->
   nth_error (fn_code f_tgt) (cs_pc cs) = Some (Inop (length (fn_code caller))).
 Proof.
-Admitted.
+  intros f_tgt Hf.
+  rewrite (caller_tgt_code f_tgt Hf).
+  apply inline_call_site_at_call_pc.
+  exact caller_call_instr.
+Qed.
 
 (* The call at cs_pc has target = call_target *)
 Lemma cs_pc_call_target : forall f_src,
@@ -904,8 +1119,7 @@ Theorem step_simulation:
     match_states s1 s2 ->
     step p s1 s1' ->
     exists s2', plus (step p') s2 s2' /\ match_states s1' s2'.
-Proof. (* temporarily commented out while the call-site proof is refactored *)
-  (*
+Proof.
   intros s1 s1' s2 Hmatch Hstep.
   inv Hmatch; inv Hstep.
 
@@ -1041,13 +1255,18 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
                    call_args (fn_params callee) reg_offset)).
       split.
       (* step through the no-op, zeroing prefix, and the call arg movements *)
-      * destruct (bind_params call_args (fn_params callee) reg_offset zero_offset) eqn:Hbinds.
+      * assert (Hnd : node_offset = zero_offset +
+                  length (bind_params call_args (fn_params callee) reg_offset zero_offset))
+          by reflexivity.
+        clearbody node_offset.
+        destruct (bind_params call_args (fn_params callee) reg_offset zero_offset) eqn:Hbinds.
         -- replace (apply_param_binds
                       (zero_regs_acc rs_tgt zero_len reg_offset)
                       call_args (fn_params callee) reg_offset)
              with (zero_regs_acc rs_tgt zero_len reg_offset).
-           ++ replace node_offset with zero_offset
-                by (unfold node_offset; rewrite Hbinds; simpl; lia).
+           ++ assert (Hnz : node_offset = zero_offset)
+                by (rewrite Hnd; simpl; lia).
+              rewrite Hnz.
               eapply plus_step.
               ** apply exec_Inop. exact HInop.
               ** eapply (exec_zero_regs p' f_tgt s_tgt rs_tgt zero_len reg_offset
@@ -1068,14 +1287,14 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
                  --- intro Hnil.
                      apply (f_equal (@length instruction)) in Hnil.
                      rewrite length_zero_regs in Hnil. simpl in Hnil. lia.
-           ++ replace (node_offset)
-                with (zero_offset +
-                      length (bind_params call_args (fn_params callee) reg_offset zero_offset))
-                by (unfold node_offset; reflexivity).
+           ++ rewrite Hnd, <- Hbinds.
               eapply (exec_bind_params p' f_tgt s_tgt
                         (zero_regs_acc rs_tgt zero_len reg_offset)
                         call_args (fn_params callee) reg_offset zero_offset).
               ** intros j instr Hnth.
+                 assert (Hzo : zero_offset = length (fn_code caller) + zero_len)
+                   by (unfold zero_offset; rewrite length_zero_regs; reflexivity).
+                 rewrite Hzo. rewrite Hzo in Hnth.
                  eapply param_bind_at; eauto.
               ** rewrite Hbinds. discriminate.
 
@@ -1113,36 +1332,48 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
         -- exact Hregsagree.
         -- exact H2.
         -- rewrite Hcall_args. exact H9.
-        -- apply regs_agree_apply_param_binds. exact Hregsagree.
-		        -- intros r.
-		           rewrite <- Hcall_args.
-		           rewrite Hmap.
-		           apply init_regs_apply_param_binds.
-		           ++ apply H2. reflexivity.
-		           ++ exact Hargs_bound.
-		        -- exact H3.
+        -- apply regs_agree_apply_param_binds. apply regs_agree_zero_regs_acc.
+           exact Hregsagree.
+        -- intros r Hr.
+           rewrite <- Hcall_args.
+           assert (Hmap2 : map_regs rs_src call_args =
+                           map_regs (zero_regs_acc rs_tgt zero_len reg_offset) call_args).
+           { unfold map_regs. apply map_ext_in. intros a Ha.
+             rewrite (Hregsagree a (Hargs_bound a Ha)).
+             symmetry. apply zero_regs_acc_preserve_low. apply Hargs_bound. exact Ha. }
+           rewrite Hmap2.
+           apply init_regs_apply_param_binds.
+           ++ intros r0 Hr0. replace (r0 + reg_offset) with (reg_offset + r0) by lia.
+              apply zero_regs_acc_fresh_zero. unfold zero_len. lia.
+           ++ exact Hargs_bound.
+           ++ exact Hr.
+        -- exact H3.
 	      
 	      (* TODO: following two cases are esentially the same, we ought to merge them into
 	      one proof hopefully. *)
 	    + (* different call site: not the inlined callsite, but fi = cs_caller *)
+	      specialize (H1 Hcaller) as Hregsagree.
 	      assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs) by auto.
 	      assert (Hcode_tgt : nth_error (fn_code f_tgt) pc = Some (Icall target args dst pc'))
-	        by (apply (code_at_pc_preserved _ _ _ _ _ H3 H4 Hdisj H10)).
+	        by (apply (code_at_pc_preserved _ _ _ _ _ H2 H3 Hdisj H9)).
 	      assert (Htgt_in_p' : exists fd_tgt, nth_error p' target = Some fd_tgt)
-	        by (destruct (find_func_preserved _ _ H11) as [? | [_ ?]]; eauto).
+	        by (destruct (find_func_preserved _ _ H10) as [? | [_ ?]]; eauto).
 	      destruct Htgt_in_p' as [fd_tgt Hfd_tgt].
 	      assert (Hmap : map_regs rs_src args = map_regs rs_tgt args).
-	      { eapply (map_regs_agree _ _ f_src pc (Icall target args dst pc'));
-	        auto. rewrite <- Hcaller. assumption. intros. simpl. right. assumption. }
-		      pose proof (inline_preserves_params target fd fd_tgt H11 Hfd_tgt) as Hparams.
+	      { eapply (map_regs_agree _ _ f_src pc (Icall target args dst pc')).
+	        - exact Hregsagree.
+	        - rewrite <- Hcaller. exact H2.
+	        - exact H9.
+	        - intros. simpl. right. assumption. }
+		      pose proof (inline_preserves_params target fd fd_tgt H10 Hfd_tgt) as Hparams.
 	      eexists. split.
 	      * apply plus_one. eapply exec_Icall; [exact Hcode_tgt | exact Hfd_tgt].
 	      * rewrite Hparams, <- Hmap.
-	        eapply match_normal.
+	        eapply match_normal with (fi := target) (f_src := fd) (f_tgt := fd_tgt).
 	        -- eapply match_stacks_cons; eauto.
 	           split.
 	           ++ intros Hneq. contradiction.
-	           ++ intros _. apply H1. exact Hcaller.
+	           ++ intros _. exact Hregsagree.
 	        -- intros _. reflexivity.
 	        -- unfold regs_agree. intros. reflexivity.
 	        -- exact H10.
@@ -1227,8 +1458,9 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
             exact Heval
         end.
       * match goal with
-        | [ Hshift : forall r, rs_callee_src r = _ |- _ ] =>
-            apply map_ext_in; intros a _; exact (Hshift a)
+        | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Iop op args dst0 pc') |- _ ] =>
+            apply map_ext_in; intros a Ha;
+            apply H4; eapply instr_regs_bounded; [exact Hinstr | simpl; right; exact Ha]
         end.
     + eapply match_inlined.
       * exact H.
@@ -1237,15 +1469,12 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
       * exact H2.
       * apply regs_agree_update_high; [exact H3|].
         unfold reg_offset. lia.
-      * intros r. unfold update.
+      * intros r Hr. unfold update.
         destruct (Nat.eqb (r + reg_offset) (dst0 + reg_offset)) eqn:Heq.
         -- apply Nat.eqb_eq in Heq. assert (r = dst0) by lia. subst.
            rewrite Nat.eqb_refl. reflexivity.
         -- apply Nat.eqb_neq in Heq. assert (r <> dst0) by lia.
-           match goal with
-           | [ Hshift : forall r, rs_callee_src r = _ |- _ ] =>
-               rewrite <- Hshift
-           end.
+           rewrite <- (H4 r Hr).
            destruct (Nat.eqb r dst0) eqn:Heq2; [apply Nat.eqb_eq in Heq2; lia | reflexivity].
       * exact H5.
 
@@ -1260,9 +1489,10 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
       simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
       eapply exec_Icond_true; [exact Hcode |].
       match goal with
-      | [ Hshift : forall r, rs_callee_src r = _,
+      | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Icond cond ifso ifnot),
           Hcond : rs_callee_src cond <> 0 |- _ ] =>
-          rewrite <- Hshift; exact Hcond
+          rewrite <- (H4 cond ltac:(eapply instr_regs_bounded; [exact Hinstr | simpl; auto]));
+          exact Hcond
       end.
 	    + eapply match_inlined; [exact H | exact H0 | exact H1 | exact H2 | exact H3 | exact H4 | exact H5].
 
@@ -1277,9 +1507,10 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
       simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
       eapply exec_Icond_false; [exact Hcode |].
       match goal with
-      | [ Hshift : forall r, rs_callee_src r = _,
+      | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Icond cond ifso ifnot),
           Hcond : rs_callee_src cond = 0 |- _ ] =>
-          rewrite <- Hshift; exact Hcond
+          rewrite <- (H4 cond ltac:(eapply instr_regs_bounded; [exact Hinstr | simpl; auto]));
+          exact Hcond
       end.
 	    + eapply match_inlined; [exact H | exact H0 | exact H1 | exact H2 | exact H3 | exact H4 | exact H5].
 
@@ -1301,19 +1532,18 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
   - (* exec_Iret inside inlined body *)
     match goal with
     | [ Hinstr : nth_error (fn_code callee) pc_callee = Some (Iret src) |- _ ] =>
-        destruct (inlined_body_at pc_callee (Iret src) Hinstr) as [cf' [Hcf' Hcode]]
+        destruct (inlined_body_at pc_callee (Iret src) Hinstr) as [cf' [Hcf' Hcode]];
+        assert (Hsrc_bound : src <= max_reg_func callee)
+          by (eapply (instr_regs_bounded callee pc_callee (Iret src) src);
+              [exact Hinstr | simpl; left; reflexivity])
     end.
     simpl in Hcode. replace cf' with caller_tgt in Hcode by congruence.
     assert (Hcall_dst : call_dst = dst).
     { unfold call_dst. rewrite H2. reflexivity. }
     assert (Hcall_succ : call_succ = ret_pc).
     { unfold call_succ. rewrite H2. reflexivity. }
-    assert (Hsrc_bound : src <= max_reg_func caller).
-    { eapply (instr_regs_bounded callee pc_callee (Iret src) src).
-      - exact Hinstr.
-      - simpl. left. reflexivity. }
     assert (Hret_val : rs_tgt (src + reg_offset) = rs_callee_src src).
-    { symmetry. apply H5. exact Hsrc_bound. }
+    { symmetry. apply H4. exact Hsrc_bound. }
     rewrite Hcall_dst, Hcall_succ in Hcode.
     exists (State s_tgt caller_tgt ret_pc (update rs_tgt dst (rs_callee_src src))).
     split.
@@ -1330,7 +1560,6 @@ Proof. (* temporarily commented out while the call-site proof is refactored *)
       * intros _. apply regs_agree_update. exact H3.
       * exact H1.
       * exact H5.
-  *)
-Admitted.
+Qed.
 
 End INLINING_PROOF.
