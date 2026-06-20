@@ -221,6 +221,38 @@ Proof.
   intros. apply nth_error_app_offset.
 Qed.
 
+Lemma length_replace_nth :
+  forall (A : Type) (l : list A) n (x : A),
+    n < length l ->
+    length (firstn n l ++ x :: skipn (n + 1) l) = length l.
+Proof.
+  intros A l.
+  induction l as [|a l IH]; intros n x Hn.
+  - inversion Hn.
+  - destruct n as [|n].
+    + simpl. lia.
+    + simpl in Hn.
+      simpl.
+      rewrite IH by lia.
+      lia.
+Qed.
+
+Lemma nth_error_replace_nth :
+  forall (A : Type) (l : list A) n (x : A),
+    n < length l ->
+    nth_error (firstn n l ++ x :: skipn (n + 1) l) n = Some x.
+Proof.
+  intros A l.
+  induction l as [|a l IH]; intros n x Hn.
+  - inversion Hn.
+  - destruct n as [|n].
+    + simpl. reflexivity.
+    + simpl in Hn.
+      simpl.
+      apply IH.
+      lia.
+Qed.
+
 Section INLINING_PROOF.
 
 Variable p : program.
@@ -544,6 +576,48 @@ Lemma inline_preserves_params : forall fi f_src f_tgt,
   fn_params f_src = fn_params f_tgt.
 Proof. solve_inline_preserves_field. Qed.
 
+(* The call site itself is rewritten to an Inop jumping to the zero-init prefix *)
+Lemma inline_call_site_at_call_pc :
+  forall call_pc args dst succ,
+    nth_error (fn_code caller) call_pc = Some (Icall call_target args dst succ) ->
+    nth_error (inline_call_site caller callee call_pc args dst succ) call_pc =
+    Some (Inop (length (fn_code caller))).
+Proof.
+  intros call_pc args dst succ Hnth.
+  unfold inline_call_site.
+  set (patched := firstn call_pc (fn_code caller) ++
+                  Inop (length (fn_code caller)) :: skipn (call_pc + 1) (fn_code caller)).
+  set (zero_init := zero_regs (S (max_reg_func callee)) reg_offset
+                    (length (fn_code caller))).
+  set (param_binds := bind_params args (fn_params callee) reg_offset
+                      (length (fn_code caller) + length zero_init)).
+  set (callee_body := transform_callee_body (fn_code callee) reg_offset
+                      (length (fn_code caller) + length zero_init +
+                       length param_binds) dst succ).
+  cbn.
+  assert (Hlt : call_pc < length (fn_code caller)).
+  { apply nth_error_Some.
+    intro Hnone. rewrite Hnone in Hnth. discriminate. }
+  assert (Hpatched : call_pc < length patched).
+  { subst patched. rewrite length_replace_nth; auto. }
+  assert (Hprefix : call_pc < length (patched ++ zero_init ++ param_binds)).
+  { rewrite !length_app. lia. }
+  rewrite nth_error_app1 by exact Hprefix.
+  rewrite nth_error_app1 by exact Hpatched.
+  subst patched.
+  rewrite nth_error_replace_same; auto.
+Qed.
+
+(* The zero-init prefix is placed immediately after the patched caller *)
+Lemma inline_call_site_zero_regs_at : forall call_pc args dst succ i instr,
+  nth_error (fn_code caller) call_pc = Some (Icall call_target args dst succ) ->
+  nth_error (zero_regs (S (max_reg_func callee)) reg_offset
+             (length (fn_code caller))) i = Some instr ->
+  nth_error (inline_call_site caller callee call_pc args dst succ)
+            (length (fn_code caller) + i) = Some instr.
+Proof.
+Admitted.
+
 (* TODO: This proof is very ugly *)
 Lemma inlined_body_at : forall pc_callee instr,
   nth_error (fn_code callee) pc_callee = Some instr ->
@@ -571,6 +645,7 @@ Lemma param_bind_at : forall f_tgt i instr,
   nth_error (bind_params call_args (fn_params callee) reg_offset
                (length (fn_code caller) + zero_len)) i = Some instr ->
   nth_error (fn_code f_tgt) (length (fn_code caller) + zero_len + i) = Some instr.
+Proof.
 Admitted.
 
 (* The instruction at cs_pc in the modified caller is Inop jumping to param binds *)
