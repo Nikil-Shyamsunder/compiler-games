@@ -202,13 +202,13 @@ Lemma nth_error_app4 :
     nth_error l4 i.
 Proof.
   intros A l1 l2 l3 l4 i.
-  rewrite nth_error_app2 by (repeat rewrite app_length; lia).
+  rewrite nth_error_app2 by (rewrite ?length_app; lia).
   replace (length l1 + (length l2 + (length l3 + i)) - length l1)
     with (length l2 + (length l3 + i)) by lia.
-  rewrite nth_error_app2 by (repeat rewrite app_length; lia).
+  rewrite nth_error_app2 by (rewrite ?length_app; lia).
   replace (length l2 + (length l3 + i) - length l2)
     with (length l3 + i) by lia.
-  rewrite nth_error_app2 by (repeat rewrite app_length; lia).
+  rewrite nth_error_app2 by (rewrite ?length_app; lia).
   replace (length l3 + i - length l3) with i by lia.
   reflexivity.
 Qed.
@@ -748,8 +748,7 @@ Proof.
   rewrite <- Hlen_patched.
   replace (length patched + length zero_init + i)
     with (length patched + (length zero_init + i)) by lia.
-  rewrite nth_error_app_offset.
-  rewrite nth_error_app_offset.
+  rewrite !nth_error_app_offset.
   rewrite nth_error_app1 by exact Hi.
   exact Hb.
 Qed.
@@ -787,9 +786,7 @@ Proof.
   rewrite <- Hlen_patched.
   replace (length patched + length zero_init + length param_binds + pc_callee)
     with (length patched + (length zero_init + (length param_binds + pc_callee))) by lia.
-  rewrite nth_error_app_offset.
-  rewrite nth_error_app_offset.
-  rewrite nth_error_app_offset.
+  rewrite !nth_error_app_offset.
   unfold transform_callee_body.
   rewrite (nth_error_map_some _ _ _ _ _ _ Hcode).
   rewrite Hlen_patched. reflexivity.
@@ -866,8 +863,7 @@ Lemma cs_pc_in_p' : forall f_tgt,
 Proof.
   intros f_tgt Hf.
   rewrite (caller_tgt_code f_tgt Hf).
-  apply inline_call_site_at_call_pc.
-  exact caller_call_instr.
+  exact (inline_call_site_at_call_pc _ _ _ _ caller_call_instr).
 Qed.
 
 (* The call at cs_pc has target = call_target *)
@@ -1044,8 +1040,7 @@ Proof.
   - apply Nat.eqb_neq in Hx.
     assert (Heq : (x + reg_offset =? prm + reg_offset) = false)
       by (apply Nat.eqb_neq; lia).
-    rewrite Heq.
-    rewrite Hrel. reflexivity.
+    rewrite Heq, Hrel. reflexivity.
 Qed.
 
 Lemma init_regs_acc_apply_param_binds :
