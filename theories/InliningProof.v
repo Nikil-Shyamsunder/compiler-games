@@ -17,6 +17,51 @@ Proof.
   - eapply plus_step; eauto.
 Qed.
 
+Definition instr_successors (i : instruction) : list node :=
+  match i with
+  | Inop pc => [pc]
+  | Iop _ _ _ pc => [pc]
+  | Icond _ ifso ifnot => [ifso; ifnot]
+  | Icall _ _ _ pc => [pc]
+  | Iret _ => []
+  end.
+
+Definition pc_valid (f : function) (pc : node) : Prop :=
+  exists instr, nth_error (fn_code f) pc = Some instr.
+
+Definition stack_valid (p : program) (s : list stackframe) : Prop :=
+  Forall (fun sf =>
+    match sf with
+    | Stackframe _ f pc _ =>
+        pc_valid f pc /\ exists fi, nth_error p fi = Some f
+    end) s.
+
+Definition state_valid (p : program) (s : state) : Prop :=
+  match s with
+  | State stk f pc _ =>
+      pc_valid f pc /\ stack_valid p stk
+  end.
+
+(* A single instruction is well formed when every intra-procedural successor
+   it names is a real PC in the same function.  Calls also have to target an
+   existing function whose entry PC [0] is valid. *)
+Definition wf_instr (p : program) (f : function) (i : instruction) : Prop :=
+  (forall pc, In pc (instr_successors i) -> pc_valid f pc) /\
+  match i with
+  | Icall target _ _ _ =>
+      exists fd, nth_error p target = Some fd /\ pc_valid fd 0
+  | _ => True
+  end.
+
+(* A program is well formed when every instruction stored in every function is
+   well formed in the sense above.  This rules out jumps into numeric PC ranges
+   that only become populated after inlining appends fresh code. *)
+Definition wf_program (p : program) : Prop :=
+  forall fi f pc instr,
+    nth_error p fi = Some f ->
+    nth_error (fn_code f) pc = Some instr ->
+    wf_instr p f instr.
+
 Fixpoint apply_param_binds (rs : regset) (args params : list reg) (ro : nat) : regset :=
   match args, params with
   | a :: args', p :: params' =>
@@ -1106,6 +1151,181 @@ Ltac solve_rs_eq :=
       let Hrs := fresh "Hrs" in
       assert (Hrs : rs_src = rs_tgt) by auto; subst rs_tgt
   end.
+
+Lemma match_states_progress_wf :
+  wf_program p ->
+  forall s1 s2,
+    match_states s1 s2 ->
+    state_valid p s1 ->
+    (exists s2', step p' s2 s2') ->
+    exists s1', step p s1 s1'.
+Proof.
+  intros Hwf s1 s2 Hmatch Hvalid [s2' Hstep_tgt].
+  inv Hmatch.
+  - simpl in Hvalid. destruct Hvalid as [[instr_src Hcode_src] Hstack_valid].
+    destruct instr_src as [pc_next | op args dst pc_next | cond ifso ifnot
+                          | target args dst pc_next | src].
+    + exists (State s_src f_src pc_next rs_src).
+      eapply exec_Inop. exact Hcode_src.
+    + assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs)
+        by (eapply pc_ne_cs_pc; eauto; discriminate).
+      assert (Hcode_tgt :
+        nth_error (fn_code f_tgt) pc = Some (Iop op args dst pc_next))
+        by (eapply code_at_pc_preserved; eauto).
+      set (src_args := args) in *.
+      inversion Hstep_tgt; subst; try congruence.
+      match goal with
+      | [ Hstep_code : nth_error (fn_code f_tgt) pc = Some (Iop _ _ _ _) |- _ ] =>
+          rewrite Hcode_tgt in Hstep_code; inversion Hstep_code; subst; clear Hstep_code
+      end.
+      eexists.
+      eapply exec_Iop; [exact Hcode_src |].
+      match goal with
+      | [ Heval : eval_op _ (map_regs rs_tgt src_args) = Some _
+          |- eval_op _ (map_regs rs_src src_args) = Some _ ] =>
+          replace (map_regs rs_src src_args) with (map_regs rs_tgt src_args);
+          [exact Heval |]
+      end.
+      destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother].
+      * symmetry. eapply map_regs_agree.
+        -- apply H1. exact Hcaller.
+        -- rewrite <- Hcaller. exact H2.
+        -- exact Hcode_src.
+        -- intros r Hr. simpl. auto.
+      * assert (rs_src = rs_tgt) by auto. subst rs_tgt. reflexivity.
+    + assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs)
+        by (eapply pc_ne_cs_pc; eauto; discriminate).
+      assert (Hcode_tgt :
+        nth_error (fn_code f_tgt) pc = Some (Icond cond ifso ifnot))
+        by (eapply code_at_pc_preserved; eauto).
+      set (src_cond := cond) in *.
+      inversion Hstep_tgt; subst; try congruence.
+      * eexists.
+        match goal with
+        | [ Hstep_code : nth_error (fn_code f_tgt) pc = Some (Icond _ _ _) |- _ ] =>
+            rewrite Hcode_tgt in Hstep_code; inversion Hstep_code; subst; clear Hstep_code
+        end.
+        eapply exec_Icond_true; [exact Hcode_src |].
+        match goal with
+        | [ Hcond : rs_tgt src_cond <> 0 |- _ ] =>
+            replace (rs_src src_cond) with (rs_tgt src_cond); [exact Hcond |]
+        end.
+        destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother].
+        -- symmetry. eapply regs_agree_on_instr.
+           ++ apply H1. exact Hcaller.
+           ++ rewrite <- Hcaller. exact H2.
+           ++ exact Hcode_src.
+           ++ simpl. auto.
+        -- assert (rs_src = rs_tgt) by auto. subst rs_tgt. reflexivity.
+      * eexists.
+        match goal with
+        | [ Hstep_code : nth_error (fn_code f_tgt) pc = Some (Icond _ _ _) |- _ ] =>
+            rewrite Hcode_tgt in Hstep_code; inversion Hstep_code; subst; clear Hstep_code
+        end.
+        eapply exec_Icond_false; [exact Hcode_src |].
+        match goal with
+        | [ Hcond : rs_tgt src_cond = 0 |- _ ] =>
+            replace (rs_src src_cond) with (rs_tgt src_cond); [exact Hcond |]
+        end.
+        destruct (Nat.eq_dec fi (cs_caller cs)) as [Hcaller | Hother].
+        -- symmetry. eapply regs_agree_on_instr.
+           ++ apply H1. exact Hcaller.
+           ++ rewrite <- Hcaller. exact H2.
+           ++ exact Hcode_src.
+           ++ simpl. auto.
+        -- assert (rs_src = rs_tgt) by auto. subst rs_tgt. reflexivity.
+    + destruct (Hwf fi f_src pc (Icall target args dst pc_next) H2 Hcode_src)
+        as [_ [_fd [Hfd _]]].
+      exists (State (Stackframe dst f_src pc_next rs_src :: s_src)
+               _fd 0 (init_regs (map_regs rs_src args) (fn_params _fd))).
+      eapply exec_Icall; eauto.
+    + assert (Hdisj : fi <> cs_caller cs \/ pc <> cs_pc cs)
+        by (eapply pc_ne_cs_pc; eauto; discriminate).
+      assert (Hcode_tgt :
+        nth_error (fn_code f_tgt) pc = Some (Iret src))
+        by (eapply code_at_pc_preserved; eauto).
+      inversion Hstep_tgt; subst; try congruence.
+      match goal with
+      | [ Hstacks : match_stacks _ _ |- _ ] =>
+          inversion Hstacks; subst; clear Hstacks
+      end.
+      exists (State s_src0 f_src0 ret_pc (update rs_src0 dst (rs_src src))).
+      eapply exec_Iret. exact Hcode_src.
+  - simpl in Hvalid. destruct Hvalid as [[instr_src Hcode_src] Hstack_valid].
+    destruct instr_src as [pc_next | op args dst0 pc_next | cond ifso ifnot
+                          | target args dst0 pc_next | src].
+    + exists (State (Stackframe dst caller ret_pc rs_caller_src :: s_src)
+               callee pc_next rs_callee_src).
+      eapply exec_Inop. exact Hcode_src.
+    + destruct (inlined_body_at pc_callee (Iop op args dst0 pc_next) Hcode_src)
+        as [cf' [Hcf' Hcode_tgt]].
+      simpl in Hcode_tgt. replace cf' with caller_tgt in Hcode_tgt by congruence.
+      set (src_args := args) in *.
+      inversion Hstep_tgt; subst; try congruence.
+      match goal with
+      | [ Hstep_code : nth_error (fn_code caller_tgt) (pc_callee + node_offset) =
+                       Some (Iop _ _ _ _) |- _ ] =>
+          rewrite Hcode_tgt in Hstep_code; inversion Hstep_code; subst; clear Hstep_code
+      end.
+      eexists.
+      eapply exec_Iop; [exact Hcode_src |].
+      match goal with
+      | [ Heval : eval_op _ (map_regs rs_tgt (map (fun r => r + reg_offset) src_args)) = Some _ |- _ ] =>
+          unfold map_regs in Heval; rewrite map_map in Heval;
+          replace (map (fun x => rs_tgt (x + reg_offset)) src_args)
+            with (map rs_callee_src src_args) in Heval;
+          [exact Heval |]
+      end.
+      apply map_ext_in. intros r Hr.
+      unfold callee_regs_agree in H4.
+      rewrite <- (H4 r).
+      * reflexivity.
+      * eapply instr_regs_bounded; [exact Hcode_src | simpl; right; exact Hr].
+    + destruct (inlined_body_at pc_callee (Icond cond ifso ifnot) Hcode_src)
+        as [cf' [Hcf' Hcode_tgt]].
+      simpl in Hcode_tgt. replace cf' with caller_tgt in Hcode_tgt by congruence.
+      set (src_cond := cond) in *.
+      inversion Hstep_tgt; subst; try congruence.
+      * match goal with
+        | [ Hstep_code : nth_error (fn_code caller_tgt) (pc_callee + node_offset) =
+                         Some (Icond _ _ _) |- _ ] =>
+            rewrite Hcode_tgt in Hstep_code; inversion Hstep_code; subst; clear Hstep_code
+        end.
+        eexists.
+        eapply exec_Icond_true; [exact Hcode_src |].
+        match goal with
+        | [ Hcond : rs_tgt (src_cond + reg_offset) <> 0 |- _ ] =>
+            unfold callee_regs_agree in H4;
+            rewrite <- (H4 src_cond) in Hcond; [exact Hcond |]
+        end.
+        eapply instr_regs_bounded; [exact Hcode_src | simpl; left; reflexivity].
+      * match goal with
+        | [ Hstep_code : nth_error (fn_code caller_tgt) (pc_callee + node_offset) =
+                         Some (Icond _ _ _) |- _ ] =>
+            rewrite Hcode_tgt in Hstep_code; inversion Hstep_code; subst; clear Hstep_code
+        end.
+        eexists.
+        eapply exec_Icond_false; [exact Hcode_src |].
+        match goal with
+        | [ Hcond : rs_tgt (src_cond + reg_offset) = 0 |- _ ] =>
+            unfold callee_regs_agree in H4;
+            rewrite <- (H4 src_cond) in Hcond; [exact Hcond |]
+        end.
+        eapply instr_regs_bounded; [exact Hcode_src | simpl; left; reflexivity].
+    + exfalso.
+      assert (Hleafb : isLeafb callee = true) by exact callee_is_leaf.
+      assert (Hleaf' : isLeaf callee).
+      { unfold isLeaf, isLeafb in *.
+        rewrite forallb_forall in Hleafb.
+        apply Forall_forall. intros x Hx.
+        specialize (Hleafb x Hx). destruct x; try exact I. discriminate. }
+      unfold isLeaf in Hleaf'. rewrite Forall_forall in Hleaf'.
+      specialize (Hleaf' _ (nth_error_In _ _ Hcode_src)).
+      simpl in Hleaf'. exact Hleaf'.
+    + exists (State s_src caller ret_pc
+               (update rs_caller_src dst (rs_callee_src src))).
+      eapply exec_Iret. exact Hcode_src.
+Qed.
 
 (** * Forward simulation *)
 
