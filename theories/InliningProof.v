@@ -39,7 +39,7 @@ Definition stack_valid (p : program) (s : list stackframe) : Prop :=
 Definition state_valid (p : program) (s : state) : Prop :=
   match s with
   | State stk f pc _ =>
-      pc_valid f pc /\ stack_valid p stk
+      pc_valid f pc /\ (exists fi, nth_error p fi = Some f) /\ stack_valid p stk
   end.
 
 (* A single instruction is well formed when every intra-procedural successor
@@ -1162,7 +1162,7 @@ Lemma match_states_progress_wf :
 Proof.
   intros Hwf s1 s2 Hmatch Hvalid [s2' Hstep_tgt].
   inv Hmatch.
-  - simpl in Hvalid. destruct Hvalid as [[instr_src Hcode_src] Hstack_valid].
+  - simpl in Hvalid. destruct Hvalid as [[instr_src Hcode_src] [_ Hstack_valid]].
     destruct instr_src as [pc_next | op args dst pc_next | cond ifso ifnot
                           | target args dst pc_next | src].
     + exists (State s_src f_src pc_next rs_src).
@@ -1251,7 +1251,7 @@ Proof.
       end.
       exists (State s_src0 f_src0 ret_pc (update rs_src0 dst (rs_src src))).
       eapply exec_Iret. exact Hcode_src.
-  - simpl in Hvalid. destruct Hvalid as [[instr_src Hcode_src] Hstack_valid].
+  - simpl in Hvalid. destruct Hvalid as [[instr_src Hcode_src] [_ Hstack_valid]].
     destruct instr_src as [pc_next | op args dst0 pc_next | cond ifso ifnot
                           | target args dst0 pc_next | src].
     + exists (State (Stackframe dst caller ret_pc rs_caller_src :: s_src)
