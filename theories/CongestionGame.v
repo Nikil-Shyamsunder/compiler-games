@@ -1,10 +1,6 @@
 (** * CongestionGame.v
 
-    Inlining-as-congestion-game layer (self-contained, plain Stdlib [nat]).
-
-    See CONGESTION_GAME_PLAN.md for the full design.  The Rosenthal exact
-    potential argument, convergence to a pure Nash equilibrium, and the
-    price-of-anarchy bound are proved below.
+    Inlining-as-congestion-game.
 
     Model: players = candidate call sites; strategy = [bool] ([true] = inline);
     resources = I-cache lines [0..E-1]; resource costs linear over [nat]
@@ -74,9 +70,7 @@ Section CongestionGame.
   Definition PNE (s : profile) : Prop :=
     forall i bi, i < N -> pcost s i <= pcost (upd s i bi) i.
 
-  (* ---------------------------------------------------------------- *)
-  (** ** Elementary finite sums and update bookkeeping *)
-  (* ---------------------------------------------------------------- *)
+  (** Elementary finite sums and update bookkeeping *)
 
   Lemma fold_right_sum_acc (l : list nat) (f : nat -> nat) (z : nat) :
     fold_right (fun i acc => f i + acc) z l =
@@ -432,9 +426,7 @@ Section CongestionGame.
       reflexivity.
   Qed.
 
-  (* ---------------------------------------------------------------- *)
-  (** ** GOAL 1 — monotone progress *)
-  (* ---------------------------------------------------------------- *)
+  (** monotone progress *)
 
   Theorem step_decreases_Phi s s' :
     step s s' -> Phi s' < Phi s.
@@ -486,9 +478,7 @@ Section CongestionGame.
       split; assumption.
   Qed.
 
-  (* ---------------------------------------------------------------- *)
-  (** ** GOAL 2 — convergence to a pure Nash equilibrium *)
-  (* ---------------------------------------------------------------- *)
+  (** convergence to a pure Nash equilibrium *)
 
   Theorem convergence :
     forall s, exists s', clos_refl_trans profile step s s' /\ PNE s'.
@@ -527,9 +517,7 @@ Section CongestionGame.
     exists s; exact Hpne.
   Qed.
 
-  (* ---------------------------------------------------------------- *)
-  (** ** GOAL 3 — price of anarchy 5/2 *)
-  (* ---------------------------------------------------------------- *)
+  (** price of anarchy 5/2 *)
 
   Theorem price_of_anarchy s p :
     PNE s -> 2 * SocialCost s <= 5 * SocialCost p.
@@ -560,15 +548,13 @@ Section CongestionGame.
 
 End CongestionGame.
 
-(* ================================================================== *)
-(** ** Instantiation: a program's call sites are the players.
+(** Instantiation: a program's call sites are the players.
 
     The abstract game is parameterized by [N], [E], [uses], [a], [b] —
     exactly the "arbitrary linear cost functions and inline/not-inline
     I-cache line mappings" of the goal.  [collect_callsites p] is the player
     set for program [p]; [N := length (collect_callsites p)].  The three
     theorems above specialize verbatim. *)
-(* ================================================================== *)
 
 Definition collect_callsites (p : program) : list callsite :=
   flat_map

@@ -1,4 +1,4 @@
-Modelling compiler passes as games and proving monotone improvement and worst-case performance bounds on them using smoothness proofs. Trying this on an inline-expansion pass for now.
+Modelling compiler passes as games and proving monotone improvement and worst-case performance bounds on them using smoothness proofs. Trying this on an inline-expansion pass for now. This project is very much a work-in-progress. 
 
 Projects that have informed this idea a lot:
 - The IR is based on Clight from CompCert, and the inlining proofs reference techniques from CompCerts backend verification project: https://compcert.org/
