@@ -9,13 +9,13 @@
     Top-level results:
       (GOAL 1) [step_decreases_Phi] : every improving best-response move
                strictly decreases the Rosenthal potential.
-      (GOAL 2) [convergence] / [exists_PNE] : iterative best response reaches,
-               and hence there exists, a pure Nash equilibrium.
+      (GOAL 2) [convergence_bounded] / [exists_PNE] : iterative better
+               response reaches, and hence there exists, a pure Nash
+               equilibrium, with an explicit potential-sized step bound.
       (GOAL 3) [price_of_anarchy] : every pure Nash equilibrium has social cost
                at most 5/2 the optimum, i.e. [2*Cost(nash) <= 5*Cost(opt)]. *)
 
 From Stdlib Require Import List Nat Bool Lia Arith Relations Wf_nat.
-From VerifPerf Require Import Syntax.
 Import ListNotations.
 
 (** [Sum n f = f 0 + f 1 + ... + f (n-1)]. *)
@@ -62,9 +62,18 @@ Section CongestionGame.
   Definition improving (s : profile) (i : nat) (bi : bool) : Prop :=
     i < N /\ pcost (upd s i bi) i < pcost s i.
 
-  (** One step of iterative best response. *)
+  (** One step of iterative better response. *)
   Inductive step : profile -> profile -> Prop :=
   | step_intro : forall s i bi, improving s i bi -> step s (upd s i bi).
+
+  (** Exactly [k] better-response steps. *)
+  Inductive steps : nat -> profile -> profile -> Prop :=
+  | steps_refl : forall s,
+      steps 0 s s
+  | steps_cons : forall k s1 s2 s3,
+      step s1 s2 ->
+      steps k s2 s3 ->
+      steps (S k) s1 s3.
 
   (** Pure Nash equilibrium: no player has an improving deviation. *)
   Definition PNE (s : profile) : Prop :=
@@ -116,6 +125,14 @@ Section CongestionGame.
     induction n as [|n IH].
     - unfold Sum; simpl; lia.
     - rewrite Sum_S, IH; reflexivity.
+  Qed.
+
+  Lemma Sum_const n c :
+    Sum n (fun _ => c) = n * c.
+  Proof.
+    induction n as [|n IH].
+    - reflexivity.
+    - rewrite Sum_S, IH; lia.
   Qed.
 
   Lemma Sum_le n f g :
@@ -227,6 +244,16 @@ Section CongestionGame.
   Proof.
     unfold load.
     apply length_filter_seq_sum.
+  Qed.
+
+  Lemma load_le_N s r :
+    load s r <= N.
+  Proof.
+    rewrite load_eq_sum.
+    eapply Nat.le_trans with (m := Sum N (fun _ => 1)).
+    - apply Sum_le; intros i Hi.
+      destruct (uses i (s i) r); lia.
+    - rewrite Sum_const; lia.
   Qed.
 
   Lemma load_upd_same s i bi r :
@@ -395,6 +422,62 @@ Section CongestionGame.
     apply Sum_S.
   Qed.
 
+  Lemma Phi_res_linear_bound r m :
+    m <= N ->
+    Phi_res r m <= m * rcost r N.
+  Proof.
+    induction m as [|m IH]; intros Hm.
+    - unfold Phi_res, Sum; simpl; lia.
+    - rewrite Phi_res_S.
+      assert (Hm' : m <= N) by lia.
+      specialize (IH Hm').
+      assert (Hcost : rcost r (S m) <= rcost r N).
+      { apply rcost_mono; lia. }
+      lia.
+  Qed.
+
+  Definition PhiBound : nat :=
+    Sum E (fun r => a r * N * N + b r * N).
+
+  Theorem Phi_bounded s :
+    Phi s <= PhiBound.
+  Proof.
+    unfold Phi, PhiBound.
+    apply Sum_le; intros r Hr.
+    eapply Nat.le_trans with (m := load s r * rcost r N).
+    - apply Phi_res_linear_bound.
+      apply load_le_N.
+    - unfold rcost.
+      pose proof (load_le_N s r) as Hload.
+      assert (Hmul : load s r * (a r * N + b r) <=
+                     N * (a r * N + b r)).
+      { apply Nat.mul_le_mono_r; exact Hload. }
+      nia.
+  Qed.
+
+  Theorem PhiBound_global A B :
+    (forall r, r < E -> a r <= A) ->
+    (forall r, r < E -> b r <= B) ->
+    PhiBound <= E * (A * N * N + B * N).
+  Proof.
+    intros Ha Hb.
+    unfold PhiBound.
+    eapply Nat.le_trans with
+      (m := Sum E (fun _ => A * N * N + B * N)).
+    - apply Sum_le; intros r Hr.
+      specialize (Ha r Hr).
+      specialize (Hb r Hr).
+      assert (HaNN : a r * N * N <= A * N * N).
+      { apply Nat.mul_le_mono_r.
+        apply Nat.mul_le_mono_r.
+        exact Ha. }
+      assert (HbN : b r * N <= B * N).
+      { apply Nat.mul_le_mono_r; exact Hb. }
+      lia.
+    - rewrite Sum_const.
+      reflexivity.
+  Qed.
+
   Lemma potential_exact s i bi :
     i < N ->
     Phi (upd s i bi) + pcost s i =
@@ -438,77 +521,210 @@ Section CongestionGame.
     lia.
   Qed.
 
+  Theorem steps_decrease_Phi_by_length k s s' :
+    steps k s s' -> Phi s' + k <= Phi s.
+  Proof.
+    induction 1.
+    - lia.
+    - pose proof (step_decreases_Phi s1 s2 H) as Hdec.
+      lia.
+  Qed.
+
+  Corollary steps_length_le_Phi k s s' :
+    steps k s s' -> k <= Phi s.
+  Proof.
+    intros Hsteps.
+    pose proof (steps_decrease_Phi_by_length k s s' Hsteps).
+    lia.
+  Qed.
+
+  Corollary potential_after_k_steps k s s' :
+    steps k s s' -> Phi s' <= Phi s - k.
+  Proof.
+    intros Hsteps.
+    pose proof (steps_decrease_Phi_by_length k s s' Hsteps).
+    lia.
+  Qed.
+
+  (** Deterministic exhaustive search of both choices for players [0..n-1]. *)
+  Fixpoint find_move (s : profile) (n : nat) : option (nat * bool) :=
+    match n with
+    | 0 => None
+    | S j =>
+        if pcost (upd s j true) j <? pcost s j then Some (j, true)
+        else if pcost (upd s j false) j <? pcost s j then Some (j, false)
+        else find_move s j
+    end.
+
+  Lemma find_move_sound n : forall s i bi,
+    find_move s n = Some (i, bi) ->
+    i < n /\ pcost (upd s i bi) i < pcost s i.
+  Proof.
+    induction n as [|j IH]; intros s i bi Hfind; simpl in Hfind.
+    - discriminate.
+    - destruct (pcost (upd s j true) j <? pcost s j) eqn:Ht.
+      + inversion Hfind; subst. apply Nat.ltb_lt in Ht. split; lia.
+      + destruct (pcost (upd s j false) j <? pcost s j) eqn:Hf.
+        * inversion Hfind; subst. apply Nat.ltb_lt in Hf. split; lia.
+        * destruct (IH s i bi Hfind) as [Hi Hcost]. split; lia.
+  Qed.
+
+  Lemma find_move_none n : forall s,
+    find_move s n = None ->
+    forall i bi, i < n -> pcost s i <= pcost (upd s i bi) i.
+  Proof.
+    induction n as [|j IH]; intros s Hfind i bi Hi; [lia|].
+    simpl in Hfind.
+    destruct (pcost (upd s j true) j <? pcost s j) eqn:Ht;
+      try discriminate.
+    destruct (pcost (upd s j false) j <? pcost s j) eqn:Hf;
+      try discriminate.
+    apply Nat.ltb_ge in Ht. apply Nat.ltb_ge in Hf.
+    destruct (Nat.eq_dec i j) as [->|Hne].
+    - destruct bi; assumption.
+    - apply (IH s Hfind); lia.
+  Qed.
+
+  Fixpoint respond (fuel : nat) (s : profile) : profile :=
+    match fuel with
+    | 0 => s
+    | S remaining =>
+        match find_move s N with
+        | None => s
+        | Some (i, bi) => respond remaining (upd s i bi)
+        end
+    end.
+
+  Theorem respond_correct fuel : forall s,
+    Phi s <= fuel ->
+    exists k,
+      k <= fuel /\ steps k s (respond fuel s) /\
+      PNE (respond fuel s).
+  Proof.
+    induction fuel as [|fuel IH]; intros s Hfuel.
+    - assert (Hnone : find_move s N = None).
+      { destruct (find_move s N) as [[i bi]|] eqn:Hfind; [|reflexivity].
+        destruct (find_move_sound N s i bi Hfind) as [Hi Hcost].
+        assert (Hstep : step s (upd s i bi)).
+        { constructor. split; assumption. }
+        pose proof (step_decreases_Phi _ _ Hstep). lia. }
+      exists 0. simpl. split; [lia|]. split; [constructor|].
+      exact (find_move_none N s Hnone).
+    - simpl. destruct (find_move s N) as [[i bi]|] eqn:Hfind.
+      + destruct (find_move_sound N s i bi Hfind) as [Hi Hcost].
+        assert (Hstep : step s (upd s i bi)).
+        { constructor. split; assumption. }
+        pose proof (step_decreases_Phi _ _ Hstep) as Hdrop.
+        destruct (IH (upd s i bi) ltac:(lia)) as [k [Hk [Hsteps Hpne]]].
+        exists (S k). split; [lia|]. split; [|exact Hpne].
+        eapply steps_cons; eauto.
+      + exists 0. split; [lia|]. split; [constructor|].
+        exact (find_move_none N s Hfind).
+  Qed.
+
+  Definition select_profile (s : profile) : profile := respond (Phi s) s.
+
+  Theorem select_profile_correct s :
+    exists k,
+      k <= Phi s /\ steps k s (select_profile s) /\
+      PNE (select_profile s).
+  Proof. apply respond_correct. reflexivity. Qed.
+
+  Corollary select_profile_PNE s : PNE (select_profile s).
+  Proof. destruct (select_profile_correct s) as [k [_ [_ H]]]. exact H. Qed.
+
+  (** Existential interfaces are corollaries of the executable search. *)
   Lemma PNE_or_improving_prefix s n :
     (forall i bi, i < n -> pcost s i <= pcost (upd s i bi) i) \/
     (exists i bi, i < n /\ pcost (upd s i bi) i < pcost s i).
   Proof.
-    induction n as [|n [Hstable|Himprove]].
-    - left; intros i bi Hi; lia.
-    - destruct (pcost (upd s n true) n <? pcost s n) eqn:Htrue.
-      + right.
-        exists n, true.
-        split; [lia|].
-        apply Nat.ltb_lt; exact Htrue.
-      + destruct (pcost (upd s n false) n <? pcost s n) eqn:Hfalse.
-        * right.
-          exists n, false.
-          split; [lia|].
-          apply Nat.ltb_lt; exact Hfalse.
-        * left.
-          intros i bi Hi.
-          destruct (Nat.eq_dec i n) as [->|Hne].
-          -- destruct bi.
-             ++ apply Nat.ltb_ge; exact Htrue.
-             ++ apply Nat.ltb_ge; exact Hfalse.
-          -- apply Hstable; lia.
-    - right.
-      destruct Himprove as (i & bi & Hi & Hcost).
-      exists i, bi.
-      split; [lia|exact Hcost].
+    destruct (find_move s n) as [[i bi]|] eqn:Hfind.
+    - right. exists i, bi. exact (find_move_sound n s i bi Hfind).
+    - left. exact (find_move_none n s Hfind).
   Qed.
 
   Lemma PNE_or_improving s :
     PNE s \/ exists i bi, improving s i bi.
+  Proof. exact (PNE_or_improving_prefix s N). Qed.
+
+  Lemma steps_clos_refl_trans k s s' :
+    steps k s s' -> clos_refl_trans profile step s s'.
   Proof.
-    destruct (PNE_or_improving_prefix s N) as [Hstable|Himprove].
-    - left; exact Hstable.
-    - right.
-      destruct Himprove as (i & bi & Hi & Hcost).
-      exists i, bi.
-      split; assumption.
+    induction 1.
+    - apply rt_refl.
+    - eapply rt_trans.
+      + apply rt_step; exact H.
+      + exact IHsteps.
   Qed.
 
-  (** convergence to a pure Nash equilibrium *)
+  Theorem convergence_bounded_fuel :
+    forall fuel s,
+      Phi s <= fuel ->
+      exists k s', k <= fuel /\ steps k s s' /\ PNE s'.
+  Proof.
+    intros fuel s Hfuel.
+    destruct (respond_correct fuel s Hfuel) as [k Hcorrect].
+    exists k, (respond fuel s). exact Hcorrect.
+  Qed.
+
+  Theorem convergence_bounded :
+    forall s,
+      exists k s',
+        k <= Phi s /\ steps k s s' /\ PNE s'.
+  Proof.
+    intros s.
+    apply convergence_bounded_fuel.
+    reflexivity.
+  Qed.
+
+  Theorem remaining_convergence_after_steps :
+    forall k s s',
+      steps k s s' ->
+      exists k_rem s_star,
+        k + k_rem <= Phi s /\ steps k_rem s' s_star /\ PNE s_star.
+  Proof.
+    intros k s s' Hsteps.
+    destruct (convergence_bounded s') as
+      (k_rem & s_star & Hk_rem & Htail & Hpne).
+    pose proof (steps_decrease_Phi_by_length k s s' Hsteps) as Hdrop.
+    exists k_rem, s_star.
+    split; [lia|].
+    split; assumption.
+  Qed.
+
+  Theorem convergence_bounded_by_params :
+    forall s,
+      exists k s',
+        k <= PhiBound /\ steps k s s' /\ PNE s'.
+  Proof.
+    intros s.
+    apply convergence_bounded_fuel.
+    apply Phi_bounded.
+  Qed.
+
+  Theorem convergence_bounded_by_global_params A B :
+    (forall r, r < E -> a r <= A) ->
+    (forall r, r < E -> b r <= B) ->
+    forall s,
+      exists k s',
+        k <= E * (A * N * N + B * N) /\ steps k s s' /\ PNE s'.
+  Proof.
+    intros Ha Hb s.
+    pose proof (Phi_bounded s) as Hphi.
+    pose proof (PhiBound_global A B Ha Hb) as Hglobal.
+    apply convergence_bounded_fuel.
+    lia.
+  Qed.
 
   Theorem convergence :
     forall s, exists s', clos_refl_trans profile step s s' /\ PNE s'.
   Proof.
-    assert (Hconv :
-              forall n s,
-                Phi s <= n ->
-                exists s',
-                  clos_refl_trans profile step s s' /\ PNE s').
-    { induction n as [n IH] using lt_wf_ind.
-      intros s Hbound.
-      destruct (PNE_or_improving s) as [Hpne|Himprove].
-      - exists s.
-        split; [apply rt_refl|exact Hpne].
-      - destruct Himprove as (i & bi & Himprove).
-        set (s2 := upd s i bi).
-        assert (Hstep : step s s2) by (subst s2; constructor; exact Himprove).
-        assert (Hphi : Phi s2 < Phi s)
-          by (apply step_decreases_Phi; exact Hstep).
-        assert (Hsmaller : Phi s2 < n) by lia.
-        destruct (IH (Phi s2) Hsmaller s2 (le_n _)) as (s' & Hrt & Hpne).
-        exists s'.
-        split; [|exact Hpne].
-        eapply rt_trans.
-        + apply rt_step; exact Hstep.
-        + exact Hrt.
-    }
     intros s.
-    apply (Hconv (Phi s) s).
-    lia.
+    destruct (convergence_bounded s) as (k & s' & _ & Hsteps & Hpne).
+    exists s'.
+    split; [|exact Hpne].
+    apply steps_clos_refl_trans with (k := k).
+    exact Hsteps.
   Qed.
 
   Corollary exists_PNE : exists s, PNE s.
@@ -547,25 +763,3 @@ Section CongestionGame.
   Qed.
 
 End CongestionGame.
-
-(** Instantiation: a program's call sites are the players.
-
-    The abstract game is parameterized by [N], [E], [uses], [a], [b] —
-    exactly the "arbitrary linear cost functions and inline/not-inline
-    I-cache line mappings" of the goal.  [collect_callsites p] is the player
-    set for program [p]; [N := length (collect_callsites p)].  The three
-    theorems above specialize verbatim. *)
-
-Definition collect_callsites (p : program) : list callsite :=
-  flat_map
-    (fun cf =>
-       let '(c, f) := cf in
-       flat_map
-         (fun pi =>
-            let '(pc, instr) := pi in
-            match instr with
-            | Icall _ _ _ _ => [ mk_callsite c pc ]
-            | _ => []
-            end)
-         (combine (seq 0 (length (fn_code f))) (fn_code f)))
-    (combine (seq 0 (length p)) p).

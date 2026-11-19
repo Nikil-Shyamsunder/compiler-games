@@ -4,3 +4,8 @@ theories/Semantics.v
 theories/Inlining.v
 theories/CongestionGame.v
 theories/InliningProof.v
+theories/BackwardSim.v
+theories/InliningCorrectness.v
+theories/ProfileInlining.v
+theories/Main.v
+theories/MainExamples.v
