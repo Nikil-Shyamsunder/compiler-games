@@ -1,4 +1,4 @@
-Modelling compiler passes as games and proving monotone improvement and worst-case performance bounds on them using smoothness proofs. Trying this on an inline-expansion pass for now. This project is very much a work-in-progress. 
+Modelling compiler passes as games and proving worst-case performance bounds and their monotone improvement using smoothness proofs. Trying this on an inline-expansion pass for now. This project is very much a work-in-progress. 
 
 The top-level pass correctness and congestion-objective guarantees are in
 `theories/Main.v`. 
@@ -8,4 +8,4 @@ Projects that have informed this idea a lot:
 - Smoothness Proof: https://www.math.uwaterloo.ca/~cswamy/courses/co759/agt-material/christodoulouk-atcongstoc.pdf
 - AGT formalizations in Rocq (some code from this project has been copied into my project): https://par.nsf.gov/servlets/purl/10050159
 
-Proofs were developed with LLMs. These changes are mostly localized in `BackwardSim.v` and `CongestionGame.v` and `ProfileInlining.v`. `InliningProof.v` was mostly proven by hand (by me). 
+Proofs were developed with LLMs. Many months ago, I hand wrote the original syntax and semantics for the language, and `InliningProof.v` was mostly proven by hand (by me). Most of the rest was generated with LLMs.
