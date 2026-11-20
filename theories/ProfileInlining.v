@@ -4,7 +4,7 @@
     profile. It is independent of the selection policy and cost objective. *)
 From Stdlib Require Import List Bool Arith Lia.
 From VerifPerf Require Import Syntax Semantics Inlining InliningProof
-  InliningCorrectness.
+  BackwardSim InliningWellformed InliningCorrectness.
 Import ListNotations.
 
 Definition collect_callsites (p : program) : list callsite :=
@@ -183,59 +183,20 @@ Proof.
     + eapply IH; exact Hcompile.
 Qed.
 
-(** Composition of the existing forward simulations. [trace_match] records
+(** Composition of the existing forward simulations. [sync_rel] records
     the matching intermediate states needed by each single-pass theorem. *)
-Inductive trace_match : program -> program -> state -> state -> Prop :=
-| trace_match_refl : forall p x, trace_match p p x x
-| trace_match_cons : forall p cs q r x y z,
+Inductive sync_rel : program -> program -> state -> state -> Prop :=
+| sync_rel_refl : forall p x, sync_rel p p x x
+| sync_rel_cons : forall p cs q r x y z,
     inline p cs = Some q ->
     match_states p cs q x y ->
-    trace_match q r y z ->
-    trace_match p r x z.
-
-Theorem trace_forward_simulation : forall p q x y,
-  trace_match p q x y ->
-  forall x', reachable p x x' ->
-    exists y', reachable q y y' /\ trace_match p q x' y'.
-Proof.
-  intros p q x y Hmatch.
-  induction Hmatch as [p x|p cs q r x y z Hinline Hsingle Htail IH];
-    intros x' Hreach.
-  - exists x'. split; [exact Hreach|constructor].
-  - destruct (inlining_forward_reachable p cs q x y x'
-                Hinline Hsingle Hreach) as [y' [Hreach' Hsingle']].
-    destruct (IH y' Hreach') as [z' [Hreach'' Htail']].
-    exists z'. split; [exact Hreach''|].
-    eapply trace_match_cons; eauto.
-Qed.
-
-Lemma inline_initial_match p cs q x :
-  inline p cs = Some q -> initial_state p x ->
-  exists y, initial_state q y /\ match_states p cs q x y.
-Proof.
-  intros Hinline [f [Hf ->]].
-  assert (Hf' : exists f', nth_error q 0 = Some f').
-  { destruct (Nat.eq_dec 0 (cs_caller cs)) as [Heq|Hne].
-    - rewrite Heq. eapply caller_in_p'; exact Hinline.
-    - exists f. eapply other_func_preserved; eauto.
-      apply nth_error_Some. rewrite Hf. discriminate. }
-  destruct Hf' as [f' Hf'].
-  pose proof (inline_preserves_params p cs q Hinline 0 f f' Hf Hf') as Hparams.
-  exists (State [] f' 0 (init_regs [] (fn_params f'))).
-  split.
-  - exists f'. split; [assumption|reflexivity].
-  - rewrite <- Hparams. eapply match_normal with (fi := 0).
-    + constructor.
-    + intros; reflexivity.
-    + unfold regs_agree; intros; reflexivity.
-    + exact Hf.
-    + exact Hf'.
-Qed.
+    sync_rel q r y z ->
+    sync_rel p r x z.
 
 Lemma trace_initial_match p q :
   inline_trace p q -> forall x,
     initial_state p x ->
-    exists y, initial_state q y /\ trace_match p q x y.
+    exists y, initial_state q y /\ sync_rel p q x y.
 Proof.
   intros Htrace. induction Htrace as [p|p cs q r Hinline Htail IH];
     intros x Hinit.
@@ -243,36 +204,121 @@ Proof.
   - destruct (inline_initial_match p cs q x Hinline Hinit)
       as [y [Hinity Hmatch]].
     destruct (IH y Hinity) as [z [Hinitz Hmatches]].
-    exists z. split; [assumption|]. eapply trace_match_cons; eauto.
+    exists z. split; [assumption|]. eapply sync_rel_cons; eauto.
 Qed.
 
-Theorem inline_trace_forward p q :
-  inline_trace p q -> forall x,
-    initial_state p x ->
-    exists y, initial_state q y /\
-      forall x', reachable p x x' ->
-        exists y', reachable q y y' /\ trace_match p q x' y'.
+(** Lifting a step simulation to a nonempty execution. *)
+Lemma lift_plus_simulation {A B} (step1 : A -> A -> Prop)
+    (step2 : B -> B -> Prop) (R : A -> B -> Prop) :
+  (forall x x' y, R x y -> step1 x x' ->
+    exists y', plus step2 y y' /\ R x' y') ->
+  forall x x' y, R x y -> plus step1 x x' ->
+    exists y', plus step2 y y' /\ R x' y'.
 Proof.
-  intros Htrace x Hinit.
-  destruct (trace_initial_match p q Htrace x Hinit) as [y [Hinity Hmatch]].
-  exists y. split; [assumption|].
-  intros x' Hreach. eapply trace_forward_simulation; eauto.
+  intros Hsim x x' y Hmatch Hsteps. revert y Hmatch.
+  induction Hsteps; intros y Hmatch.
+  - eapply Hsim; eauto.
+  - destruct (Hsim _ _ _ Hmatch H) as [y' [Hfirst Hmatch']].
+    destruct (IHHsteps y' Hmatch') as [y'' [Hrest Hmatch'']].
+    exists y''. split; [eapply plus_trans; eauto|assumption].
 Qed.
 
-(** Every profile is safe, independently of how it was selected. *)
-Definition preserves_execution (p q : program) : Prop :=
-  forall x, initial_state p x ->
-    exists y, initial_state q y /\
-      forall x', reachable p x x' ->
-        exists y', reachable q y y' /\ trace_match p q x' y'.
-
-Theorem compile_profile_correct p s :
-  exists q, compile_profile p (candidate_sites p) s = Some q /\
-    preserves_execution p q.
+Lemma trace_plus_simulation p q x y :
+  sync_rel p q x y -> forall x', plus (step p) x x' ->
+    exists y', plus (step q) y y' /\ sync_rel p q x' y'.
 Proof.
-  destruct (candidate_profiles_compile p s) as [q Hcompile].
-  exists q. split; [exact Hcompile|].
-  assert (Htrace : inline_trace p q).
-  { eapply compile_from_trace; exact Hcompile. }
-  exact (inline_trace_forward p q Htrace).
+  intros Hmatch. induction Hmatch as
+    [p x|p cs q r x y z Hinline Hsingle Htail IH]; intros x' Hstep.
+  - exists x'. split; [assumption|constructor].
+  - destruct (lift_plus_simulation (step p) (step q) (match_states p cs q)
+      (step_simulation p cs q Hinline) x x' y Hsingle Hstep)
+      as [y' [Hsteps Hsingle']].
+    destruct (IH y' Hsteps) as [z' [Hsteps' Htail']].
+    exists z'. split; [assumption|]. eapply sync_rel_cons; eauto.
+Qed.
+
+Theorem trace_step_simulation p q x y :
+  sync_rel p q x y -> forall x', step p x x' ->
+    exists y', plus (step q) y y' /\ sync_rel p q x' y'.
+Proof.
+  intros Hmatch x' Hstep. eapply trace_plus_simulation; [exact Hmatch|].
+  constructor. exact Hstep.
+Qed.
+
+Lemma sync_rel_valid p q x y :
+  sync_rel p q x y -> state_valid p x -> state_valid q y.
+Proof.
+  intros Hmatch. induction Hmatch; intros Hvalid; [assumption|].
+  apply IHHmatch. eapply match_states_valid; eauto.
+Qed.
+
+Lemma sync_rel_progress p q x y :
+  sync_rel p q x y -> wf_program p -> state_valid p x ->
+  (exists y', step q y y') -> exists x', step p x x'.
+Proof.
+  intros Hmatch. induction Hmatch as
+    [p x|p cs q r x y z Hinline Hsingle Htail IH];
+    intros Hwf Hvalid Hstep; [assumption|].
+  assert (Hwfq : wf_program q) by (eapply inline_preserves_wf; eauto).
+  assert (Hvalidq : state_valid q y) by (eapply match_states_valid; eauto).
+  destruct (IH Hwfq Hvalidq Hstep) as [y' Hstepq].
+  eapply match_states_progress_wf; eauto.
+Qed.
+
+(** Include the source invariant in the relation, so it is maintained across
+    the generic conversion from forward to backward simulation. *)
+Definition valid_sync_rel p q x y : Prop :=
+  sync_rel p q x y /\ state_valid p x.
+
+(** One common relation for both directions: the target is exactly [m]
+    steps before a synchronization point matching the current source. *)
+Definition sim_rel p q (m : nat) x y : Prop :=
+  bmatch (step q) (valid_sync_rel p q) x y m.
+
+Lemma trace_common_forward p q :
+  wf_program p -> forall x y m,
+    sim_rel p q m x y -> forall x', step p x x' ->
+      exists y', plus (step q) y y' /\ sim_rel p q 0 x' y'.
+Proof.
+  intros Hwf x y m [sync [Hpending [Hmatch Hvalid]]] x' Hstep.
+  destruct (trace_step_simulation p q x sync Hmatch x' Hstep)
+    as [y' [Hsteps Hmatch']].
+  exists y'. split; [eapply starN_plus; eauto|].
+  exists y'. split; [constructor|]. split; [assumption|].
+  eapply state_valid_step; eauto.
+Qed.
+
+Theorem trace_backward_simulation p q :
+  wf_program p ->
+  forall x y m, sim_rel p q m x y ->
+  forall y', step q y y' ->
+    (exists x' m', plus (step p) x x' /\
+       sim_rel p q m' x' y') \/
+    (exists m', sim_rel p q m' x y' /\ m' < m).
+Proof.
+  intros Hwf.
+  apply forward_det_to_backward.
+  - intros x x' y [Hmatch Hvalid] Hstep.
+    destruct (trace_step_simulation p q x y Hmatch x' Hstep)
+      as [y' [Hsteps Hmatch']].
+    exists y'. split; [assumption|]. split; [assumption|].
+    eapply state_valid_step; eauto.
+  - intros. eapply step_deterministic; eauto.
+  - intros x y [Hmatch Hvalid] Hstep. eapply sync_rel_progress; eauto.
+Qed.
+
+Lemma sync_rel_final p q x y :
+  sync_rel p q x y -> forall v, final_state x v -> final_state y v.
+Proof.
+  intros Hmatch. induction Hmatch; intros v Hfinal; [assumption|].
+  apply IHHmatch. eapply match_final_forward; eauto.
+Qed.
+
+Lemma sync_rel_final_backward p q x y :
+  sync_rel p q x y -> state_valid p x ->
+  forall v, final_state y v -> final_state x v.
+Proof.
+  intros Hmatch. induction Hmatch; intros Hvalid v Hfinal; [assumption|].
+  eapply match_final_backward; eauto.
+  apply IHHmatch; [eapply match_states_valid; eauto|assumption].
 Qed.

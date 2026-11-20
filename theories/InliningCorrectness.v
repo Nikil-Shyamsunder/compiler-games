@@ -1,6 +1,6 @@
 (** Reachability results for a single inline operation. *)
-From VerifPerf Require Import Syntax Semantics Inlining InliningProof BackwardSim.
-From Stdlib Require Import List Lia.
+From VerifPerf Require Import Syntax Semantics Inlining InliningProof BackwardSim InliningWellformed.
+From Stdlib Require Import List Arith Lia.
 Import ListNotations.
 
 Inductive star {A : Type} (step : A -> A -> Prop) : A -> A -> Prop :=
@@ -29,6 +29,14 @@ Proof.
   intros A R s1 s2 Hplus.
   induction Hplus.
   - eapply star_step; [eassumption | constructor].
+  - eapply star_step; eauto.
+Qed.
+
+Lemma starN_to_star : forall {A} (R : A -> A -> Prop) n s1 s2,
+  starN R n s1 s2 -> star R s1 s2.
+Proof.
+  intros A R n s1 s2 Hsteps. induction Hsteps.
+  - constructor.
   - eapply star_step; eauto.
 Qed.
 
@@ -160,7 +168,6 @@ Proof.
     + eapply IHHtgt_reach; eauto.
 Qed.
 
-(* Technically, we don't need backward stuff in the current top-level *)
 Theorem inlining_backward_reachable :
   forall p cs p' s0 s0' s',
     inline p cs = Some p' ->
@@ -208,4 +215,165 @@ Proof.
   assert (smid = s1') by (eapply step_deterministic; eauto). subst smid.
   exists s1, m. split; [exact Hstep_src |].
   exists sf. split; [exact Hrest | exact Hmatchf].
+Qed.
+
+Lemma inline_initial_match p cs q x :
+  inline p cs = Some q -> initial_state p x ->
+  exists y, initial_state q y /\ match_states p cs q x y.
+Proof.
+  intros Hinline [f [Hf ->]].
+  assert (Hf' : exists f', nth_error q 0 = Some f').
+  { destruct (Nat.eq_dec 0 (cs_caller cs)) as [Heq|Hne].
+    - rewrite Heq. eapply caller_in_p'; exact Hinline.
+    - exists f. eapply other_func_preserved; eauto.
+      apply nth_error_Some. rewrite Hf. discriminate. }
+  destruct Hf' as [f' Hf'].
+  pose proof (inline_preserves_params p cs q Hinline 0 f f' Hf Hf') as Hparams.
+  exists (State [] f' 0 (init_regs [] (fn_params f'))).
+  split.
+  - exists f'. split; [assumption|reflexivity].
+  - rewrite <- Hparams. eapply match_normal with (fi := 0).
+    + constructor.
+    + intros; reflexivity.
+    + unfold regs_agree; intros; reflexivity.
+    + exact Hf.
+    + exact Hf'.
+Qed.
+
+Lemma inline_preserves_entrypoints p cs q :
+  inline p cs = Some q -> wf_entrypoints p -> wf_entrypoints q.
+Proof.
+  intros Hinline Hentry fi f' Hf'.
+  destruct (inline_lookup_source p cs q fi f' Hinline Hf') as [f [Hf Hlength]].
+  apply pc_valid_iff. specialize (Hentry fi f Hf).
+  apply pc_valid_iff in Hentry. lia.
+Qed.
+
+Lemma initial_state_unique p x y :
+  initial_state p x -> initial_state p y -> x = y.
+Proof. intros [f [Hf ->]] [g [Hg ->]]. assert (f = g) by congruence. congruence. Qed.
+
+Lemma inline_source_initial p cs q :
+  inline p cs = Some q -> exists x, initial_state p x.
+Proof.
+  intros Hinline. destruct p as [|f rest].
+  - unfold inline in Hinline. rewrite nth_error_nil in Hinline. discriminate.
+  - exists (State [] f 0 (init_regs [] (fn_params f))).
+    exists f. auto.
+Qed.
+
+Lemma final_no_step p x v :
+  final_state x v -> forall y, ~ step p x y.
+Proof.
+  intros (f & pc & rs & ret & -> & Hret & Hv) y Hstep.
+  inversion Hstep; subst; congruence.
+Qed.
+
+Lemma final_starN p x y v n :
+  final_state x v -> starN (step p) n x y -> x = y.
+Proof.
+  intros Hfinal Hsteps. inversion Hsteps; subst; [reflexivity|].
+  exfalso. eapply final_no_step; eauto.
+Qed.
+
+Lemma match_final_forward p cs q x y v :
+  inline p cs = Some q -> match_states p cs q x y ->
+  final_state x v -> final_state y v.
+Proof.
+  intros Hinline Hmatch Hfinal.
+  destruct Hmatch as
+    [stk stk' fi f f' pc rs rs' Hstacks Hother Hregs Hf Hf'|
+     stk stk' dst retpc rsc rsc' pc rscallee rs' caller'
+       Hstacks Hregs Hcaller Hcall Hregs' Hcallee Hcaller'].
+  - destruct Hfinal as (f0 & pc0 & rs0 & ret & Hstate & Hret & Hv).
+    inversion Hstate; subst. inversion Hstacks; subst.
+    assert (Hdistinct : fi <> cs_caller cs \/ pc0 <> cs_pc cs).
+    { eapply pc_ne_cs_pc; eauto; discriminate. }
+    assert (Hret' : nth_error (fn_code f') pc0 = Some (Iret ret)).
+    { eapply code_at_pc_preserved; eauto. }
+    exists f', pc0, rs', ret. split; [reflexivity|]. split; [assumption|].
+    destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq|Hne].
+    + eapply regs_agree_on_instr; [apply Hregs; exact Heq| |exact Hret|simpl; auto].
+      rewrite <- Heq. exact Hf.
+    + rewrite <- (Hother Hne). reflexivity.
+  - destruct Hfinal as (f0 & pc0 & rs0 & ret & Hstate & _).
+    discriminate Hstate.
+Qed.
+
+Lemma match_final_backward p cs q x y v :
+  inline p cs = Some q -> match_states p cs q x y -> state_valid p x ->
+  final_state y v -> final_state x v.
+Proof.
+  intros Hinline Hmatch Hvalid Hfinal.
+  destruct Hmatch as
+    [stk stk' fi f f' pc rs rs' Hstacks Hother Hregs Hf Hf'|
+     stk stk' dst retpc rsc rsc' pc rscallee rs' caller'
+       Hstacks Hregs Hcaller Hcall Hregs' Hcallee Hcaller'].
+  - destruct Hfinal as (f0 & pc0 & rs0 & ret & Hstate & Hret & Hv).
+    inversion Hstate; subst. inversion Hstacks; subst.
+    simpl in Hvalid. destruct Hvalid as [[instr Hcode] _].
+    assert (Hdistinct : fi <> cs_caller cs \/ pc0 <> cs_pc cs).
+    { destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq|Hne]; [|auto].
+      right. intros Hpc. subst fi pc0.
+      pose proof (cs_pc_in_p' p cs q Hinline f0 Hf') as Hnop. congruence. }
+    pose proof (code_at_pc_preserved p cs q Hinline fi f f0 pc0 instr
+      Hf Hf' Hdistinct Hcode) as Hcode'.
+    assert (instr = Iret ret) by congruence. subst instr.
+    exists f, pc0, rs, ret. split; [reflexivity|]. split; [assumption|].
+    symmetry.
+    destruct (Nat.eq_dec fi (cs_caller cs)) as [Heq|Hne].
+    + eapply regs_agree_on_instr; [apply Hregs; exact Heq| |exact Hcode|simpl; auto].
+      rewrite <- Heq. exact Hf.
+    + rewrite <- (Hother Hne). reflexivity.
+  - destruct Hfinal as (f0 & pc0 & rs0 & ret & Hstate & Hret & Hv).
+    inversion Hstate; subst.
+    simpl in Hvalid. destruct Hvalid as [[instr Hcode] _].
+    destruct (inlined_body_at p cs q Hinline pc instr Hcode)
+      as [f' [Hf' Hcode']].
+    assert (f' = f0) by congruence. subst f'.
+    destruct instr; simpl in Hcode'; congruence.
+Qed.
+
+Lemma bmatch_final_backward p cs q x y v m :
+  inline p cs = Some q ->
+  bmatch (step q) (match_states p cs q) x y m -> state_valid p x ->
+  final_state y v -> final_state x v.
+Proof.
+  intros Hinline [endstate [Hsteps Hmatch]] Hvalid Hfinal.
+  assert (y = endstate) by (eapply final_starN; eauto). subst endstate.
+  eapply match_final_backward; eauto.
+Qed.
+
+Lemma match_stacks_valid p cs q stk stk' :
+  inline p cs = Some q -> match_stacks p cs q stk stk' ->
+  stack_valid p stk -> stack_valid q stk'.
+Proof.
+  intros Hinline Hmatch. induction Hmatch; intros Hvalid; [constructor|].
+  inversion Hvalid as [|? ? Hhead Htail]; subst.
+  destruct Hhead as [Hpc _]. constructor.
+  - split.
+    + eapply inline_pc_valid; eauto.
+    + eexists; eassumption.
+  - apply IHHmatch. exact Htail.
+Qed.
+
+Lemma match_states_valid p cs q x y :
+  inline p cs = Some q -> match_states p cs q x y ->
+  state_valid p x -> state_valid q y.
+Proof.
+  intros Hinline Hmatch Hvalid.
+  destruct Hmatch as
+    [stk stk' fi f f' pc rs rs' Hstacks Hother Hregs Hf Hf'|
+     stk stk' dst retpc rsc rsc' pc rscallee rs' caller'
+       Hstacks Hregs Hcaller Hcall Hregs' Hcallee Hcaller'].
+  - simpl in *. destruct Hvalid as [Hpc [_ Hstack]].
+    split; [eapply inline_pc_valid; eauto|].
+    split; [eauto|]. eapply match_stacks_valid; eauto.
+  - simpl in *. destruct Hvalid as [[instr Hcode] [_ Hstack]].
+    destruct (inlined_body_at p cs q Hinline pc instr Hcode)
+      as [f' [Hf' Hcode']].
+    assert (f' = caller') by congruence. subst f'.
+    split; [eexists; exact Hcode'|]. split; [eauto|].
+    inversion Hstack as [|? ? Hhead Htail]; subst.
+    eapply match_stacks_valid; eauto.
 Qed.

@@ -5,6 +5,7 @@ theories/Inlining.v
 theories/CongestionGame.v
 theories/InliningProof.v
 theories/BackwardSim.v
+theories/InliningWellformed.v
 theories/InliningCorrectness.v
 theories/ProfileInlining.v
 theories/Main.v

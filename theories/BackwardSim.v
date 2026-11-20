@@ -34,6 +34,13 @@ Proof.
   - destruct IHplus as [n Hn]. exists (S n). eapply starN_step; eassumption.
 Qed.
 
+Lemma starN_plus : forall {C} (R : C -> C -> Prop) n c1 c2 c3,
+  starN R n c1 c2 -> plus R c2 c3 -> plus R c1 c3.
+Proof.
+  intros C R n c1 c2 c3 Hprefix Hsuffix.
+  induction Hprefix; [assumption|]. eapply plus_step; eauto.
+Qed.
+
 (** ** Backward match: source [a] matches a target state [b] that is exactly
        [m] target steps "behind" a synchronisation point [bend]. *)
 

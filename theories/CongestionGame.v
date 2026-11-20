@@ -422,6 +422,24 @@ Section CongestionGame.
     apply Sum_S.
   Qed.
 
+  (** Twice the potential dominates the social objective for nonnegative
+      affine delays. This does not assert monotonicity of social cost. *)
+  Lemma resource_cost_le_twice_potential r m :
+    m * rcost r m <= 2 * Phi_res r m.
+  Proof.
+    induction m as [|m IH].
+    - simpl; lia.
+    - rewrite Phi_res_S. unfold rcost in *. nia.
+  Qed.
+
+  Theorem social_cost_le_twice_potential s :
+    SocialCost s <= 2 * Phi s.
+  Proof.
+    rewrite SocialCost_eq. unfold Phi.
+    rewrite <- Sum_scal. apply Sum_le. intros r Hr.
+    apply resource_cost_le_twice_potential.
+  Qed.
+
   Lemma Phi_res_linear_bound r m :
     m <= N ->
     Phi_res r m <= m * rcost r N.
@@ -544,6 +562,26 @@ Section CongestionGame.
     intros Hsteps.
     pose proof (steps_decrease_Phi_by_length k s s' Hsteps).
     lia.
+  Qed.
+
+  Theorem intermediate_cost_bound k s s' :
+    steps k s s' -> SocialCost s' <= 2 * (Phi s - k).
+  Proof.
+    intros Hsteps.
+    pose proof (social_cost_le_twice_potential s').
+    pose proof (steps_decrease_Phi_by_length k s s' Hsteps). lia.
+  Qed.
+
+  Theorem intermediate_cost_bound_by_global_params A B k s s' :
+    (forall r, r < E -> a r <= A) ->
+    (forall r, r < E -> b r <= B) ->
+    steps k s s' ->
+    SocialCost s' <= 2 * (E * (A * N * N + B * N) - k).
+  Proof.
+    intros Ha Hb Hsteps.
+    pose proof (intermediate_cost_bound k s s' Hsteps).
+    pose proof (Phi_bounded s).
+    pose proof (PhiBound_global A B Ha Hb). lia.
   Qed.
 
   (** Deterministic exhaustive search of both choices for players [0..n-1]. *)
